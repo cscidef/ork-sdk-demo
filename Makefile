@@ -1,4 +1,4 @@
-.PHONY: help setup test test-python test-cpp server-start server-stop demo-echo clean pack-server
+.PHONY: help setup test test-all test-python test-cpp server-start server-stop demo-echo clean pack-server
 
 # Default target
 help:
@@ -8,6 +8,7 @@ help:
 	@echo "  make server-start   - Start the demo server"
 	@echo "  make server-stop    - Stop the demo server"
 	@echo "  make test           - Run all tests (Python + C++)"
+	@echo "  make test-all       - Run scripts/run_all_tests.sh (summary report)"
 	@echo "  make test-python    - Run Python tests only"
 	@echo "  make test-cpp       - Run C++ tests only"
 	@echo "  make demo-echo      - Run the echo demo"
@@ -32,6 +33,9 @@ test-cpp:
 	cd cpp && cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build && cd build && ctest --output-on-failure
 
 test: test-python test-cpp
+
+test-all:
+	bash scripts/run_all_tests.sh
 
 demo-echo: server-start
 	@echo "Running echo demo..."
