@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+*.so
+*.dylib
+!server/macos-arm64/lib/*.dylib
+
+# C++
+cpp/build/
+*.o
+*.a
+!cpp/lib/**/*.a
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Server runtime
+server/.server.pid
+server/server.log
+server/logs/
+server/config/.validation.bak
+
+# Test output
+.pytest_cache/
+htmlcov/
+.coverage
+test-results/

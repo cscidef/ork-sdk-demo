@@ -1,0 +1,10 @@
+# Ork SDK Demo - Sync Configuration
+# Required by ConfigManager (server.yaml has no explicit `includes`, so the
+# default include list network/room/sync/log/metrics is used).
+sync:
+  # tick_rate_hz drives TransportConfig.pumpRate and RoomConfig.tickRate.
+  tick_rate_hz: 50
+  max_frame_time_ms: 250
+  # reserved (kept for schema compatibility; no consumer in the demo host)
+  delta_history_ticks: 100
+  full_snapshot_send_interval: 50

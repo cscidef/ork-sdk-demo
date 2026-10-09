@@ -1,0 +1,4 @@
+server:
+  name: "ork-demo-server"
+  log_level: info
+  log_file: ""

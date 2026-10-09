@@ -1,0 +1,3 @@
+room:
+  max_players: 16
+  heartbeat_timeout_ms: 5000

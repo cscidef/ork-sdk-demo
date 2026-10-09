@@ -1,0 +1,6 @@
+# Ork SDK Demo - Log Configuration
+# `file` is resolved relative to the --workspace directory (server/),
+# so the runtime log lands at server/logs/ork.log. start.sh creates that dir.
+log:
+  level: Info # possible values: Trace, Debug, Info, Warn, Error, Critical, Off
+  file: logs/ork.log

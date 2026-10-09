@@ -1,0 +1,5 @@
+# Ork SDK Demo - Metrics Configuration
+# Required by ConfigManager's default include list.
+metrics:
+  tick_lag_count_threshold: 5
+  worker_queue_length_threshold: 1000

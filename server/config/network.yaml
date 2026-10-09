@@ -1,0 +1,40 @@
+# Ork SDK Demo - Network Configuration
+# Mode: plaintext_dev (loopback only, no TLS required)
+# WARNING: This configuration is for local demo/testing ONLY.
+# Production deployments MUST use bootstrap_security: tls
+
+network:
+  game_port: 9400
+
+  # Transport
+  enable_kcp: true
+  kcp_update_rate: 100
+  pump_rate: 30
+  max_packet_size: 1200
+
+  # Encryption (cipher layer, independent of bootstrap security)
+  enable_encryption: true
+  bootstrap_ttl_sec: 300
+  cipher_debug_log: false
+
+  # Connection management
+  connection_idle_timeout_sec: 300
+  max_connections: 64
+
+  # Bootstrap security
+  bootstrap_security: plaintext_dev
+
+  # KCP tuning
+  kcp:
+    nodelay: 2
+    interval: 10
+    fast_resend: 2
+    no_congestion: true
+    sndwnd: 128
+    rcvwnd: 128
+    stream_mode: false
+    rx_min_rto: 10
+
+  # UDP buffers
+  udp_receive_buffer_bytes: 4194304
+  udp_send_buffer_bytes: 4194304
