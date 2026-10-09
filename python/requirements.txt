@@ -1,0 +1,12 @@
+# Ork Python Demo — 运行依赖
+#
+# ork_cipher.py 的 ChaCha20-Poly1305-IETF(AEAD) 由 PyNaCl(libsodium) 提供，
+# 这是唯一必需的加密后端（不是 cryptography，也不是纯 Python）。
+PyNaCl>=1.5.0
+
+# 测试框架（离线单元测试 + 在线集成测试）
+pytest>=8.0
+
+# 精简版传输库为「全 opaque、零 protobuf」路径，运行 demos/tests 并不需要
+# protobuf；此处保留仅为与上游 SDK 依赖基线对齐、方便后续扩展 proto 示例。
+protobuf>=4.0.0
