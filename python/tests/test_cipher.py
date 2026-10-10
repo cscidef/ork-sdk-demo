@@ -9,28 +9,29 @@
 - 重放检测：RUDP seq 必须严格递增；UDP 窗口内重复被拒
 - 完整性：篡改密文 → open 返回 None
 - 与 testdata/golden/cipher_seal.hex 交叉校验
+
+所有密钥 / 明文 / payload 模式统一来自 tests/vectors.py（单一来源）。
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
+import vectors as V
 from lib import ork_cipher as C
 
 
 def _state(*, encryption_required: bool = True) -> C.CipherState:
     return C.CipherState(
-        c2s_key=bytes([0x11] * 32),
-        s2c_key=bytes([0x22] * 32),
-        connection_id=0x12345678,
-        session_token=0xAABBCCDD,
+        c2s_key=V.CIPHER_C2S_KEY,
+        s2c_key=V.CIPHER_S2C_KEY,
+        connection_id=V.CIPHER_CONNECTION_ID,
+        session_token=V.CIPHER_SESSION_TOKEN,
         encryption_required=encryption_required,
     )
 
 
-PLAIN = bytes([0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02])
+PLAIN = V.CIPHER_PLAIN
 
 
 # ── seal / open 往返 ────────────────────────────────────────────────────────
@@ -159,8 +160,8 @@ def test_open_rejects_bad_version_and_short_frame():
 # ── golden 交叉校验 ─────────────────────────────────────────────────────────
 
 
-def test_golden_cipher_seal_matches():
-    p = Path(__file__).resolve().parent.parent / "testdata" / "golden" / "cipher_seal.hex"
+def test_golden_cipher_seal_matches(testdata_dir):
+    p = testdata_dir / "golden" / "cipher_seal.hex"
     if not p.is_file():
         pytest.skip("golden/cipher_seal.hex 不存在")
     golden = bytes.fromhex("".join(p.read_text().split()))
@@ -172,15 +173,15 @@ def test_golden_cipher_seal_matches():
 # ── testdata/payloads 各尺寸 seal→open 往返 ─────────────────────────────────
 
 
-@pytest.mark.parametrize("size", [1, 64, 512, 1200])
-def test_payload_files_roundtrip(size):
-    p = Path(__file__).resolve().parent.parent / "testdata" / "payloads" / f"payload_{size}.bin"
+@pytest.mark.parametrize("size", V.PAYLOAD_SIZES)
+def test_payload_files_roundtrip(testdata_dir, size):
+    p = testdata_dir / "payloads" / f"payload_{size}.bin"
     if not p.is_file():
         pytest.skip(f"payloads/payload_{size}.bin 不存在")
     data = p.read_bytes()
     assert len(data) == size
     # 可预测模式：第 i 字节 = (i*31+7)&0xFF
-    assert data == bytes((i * 31 + 7) & 0xFF for i in range(size))
+    assert data == V.payload_pattern(size)
     tx = _state()
     frame = C.seal(tx, C.CHANNEL_RUDP, C.C2S, 5, data)
     assert frame is not None

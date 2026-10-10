@@ -28,6 +28,9 @@
  *   - IConnectionRegistry::Disconnect() 与 ISender::Send() 在回调里调用是安全的；
  *   - OnPayload 的 span 只在本次回调内有效，要留存必须自己拷贝。
  *
+ * 回显监听器（orkdemo::EchoListener，与 test_cpp_roundtrip 共用同一份实现）
+ * 就是这个契约的最小示范：只做计数 + 入队，不碰 Stop / 不做阻塞 IO。
+ *
  * 用法
  * ----
  *   ./03_cpp_host                        # 监听 9400
@@ -41,115 +44,12 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <memory>
-#include <span>
 #include <string>
 
 namespace {
 
 std::atomic<bool> g_stop{false};
-
-// ----------------------------------------------------------------------------
-// EchoListener —— 最小 IHostListener 实现：收到什么就原样、同通道送回去
-// ----------------------------------------------------------------------------
-class EchoListener final : public ork::sdk::IHostListener
-{
-public:
-    explicit EchoListener(ork::sdk::ISender& sender) noexcept : sender_(sender) {}
-
-    void OnConnected(ConnectionId connectionId) override
-    {
-        connections_.fetch_add(1, std::memory_order_relaxed);
-        std::printf("[host] + connection %u  (累计接入 %llu)\n",
-                    connectionId,
-                    static_cast<unsigned long long>(
-                        connections_.load(std::memory_order_relaxed)));
-        std::fflush(stdout);
-    }
-
-    void OnDisconnected(ConnectionId connectionId, DisconnectReason reason) override
-    {
-        disconnections_.fetch_add(1, std::memory_order_relaxed);
-        std::printf("[host] - connection %u  reason=%s\n",
-                    connectionId, ToString(reason));
-        std::fflush(stdout);
-    }
-
-    void OnPayload(ConnectionId connectionId,
-                   ork::sdk::Channel channel,
-                   std::span<const uint8_t> payload) override
-    {
-        payloads_.fetch_add(1, std::memory_order_relaxed);
-
-        // 回显：原样、同通道。
-        // ISender::Send 内部只把 payload 拷进出站队列，返回后 span 即可失效。
-        const ork::sdk::SendResult r = sender_.Send(connectionId, payload, channel);
-        if (r != ork::sdk::SendResult::Ok)
-        {
-            failures_.fetch_add(1, std::memory_order_relaxed);
-            std::printf("[host] ! echo to %u failed: %s\n",
-                        connectionId,
-                        std::string(ork::sdk::ToString(r)).c_str());
-            std::fflush(stdout);
-            return;
-        }
-        echoed_.fetch_add(1, std::memory_order_relaxed);
-
-        if (orkdemo::IsEchoMagic(payload))
-        {
-            char marker[9] = {0};
-            std::memcpy(marker, payload.data() + orkdemo::kEchoMagic.size(), 8);
-            std::printf("[host] ~ echo %zu B to %u via %s (ORKBENCH1 marker=%s)\n",
-                        payload.size(), connectionId,
-                        channel == ork::sdk::Channel::Reliable ? "Reliable" : "Unreliable",
-                        marker);
-        }
-        else
-        {
-            std::printf("[host] ~ echo %zu B to %u via %s\n",
-                        payload.size(), connectionId,
-                        channel == ork::sdk::Channel::Reliable ? "Reliable" : "Unreliable");
-        }
-        std::fflush(stdout);
-    }
-
-    void OnStats(const ork::sdk::OrkStats& stats) override
-    {
-        // OnStats 约每秒一次；只缓存标量，别在回调里做重活。
-        active_.store(stats.activeConnections, std::memory_order_relaxed);
-        bytesIn_.store(stats.bytesIn,   std::memory_order_relaxed);
-        bytesOut_.store(stats.bytesOut, std::memory_order_relaxed);
-        packetsIn_.store(stats.packetsIn, std::memory_order_relaxed);
-        cryptoFails_.store(stats.cryptoFailAead + stats.cryptoFailReplay
-                           + stats.cryptoFailExpired + stats.cryptoFailMalformed,
-                           std::memory_order_relaxed);
-    }
-
-    // ---- 主线程读取的快照 ----
-    uint64_t payloads()     const noexcept { return payloads_.load(std::memory_order_relaxed); }
-    uint64_t echoed()       const noexcept { return echoed_.load(std::memory_order_relaxed); }
-    uint64_t failures()     const noexcept { return failures_.load(std::memory_order_relaxed); }
-    uint64_t active()       const noexcept { return active_.load(std::memory_order_relaxed); }
-    uint64_t bytesIn()      const noexcept { return bytesIn_.load(std::memory_order_relaxed); }
-    uint64_t bytesOut()     const noexcept { return bytesOut_.load(std::memory_order_relaxed); }
-    uint64_t packetsIn()    const noexcept { return packetsIn_.load(std::memory_order_relaxed); }
-    uint64_t cryptoFails()  const noexcept { return cryptoFails_.load(std::memory_order_relaxed); }
-
-private:
-    ork::sdk::ISender& sender_;
-
-    std::atomic<uint64_t> connections_{0};
-    std::atomic<uint64_t> disconnections_{0};
-    std::atomic<uint64_t> payloads_{0};
-    std::atomic<uint64_t> echoed_{0};
-    std::atomic<uint64_t> failures_{0};
-    std::atomic<uint64_t> active_{0};
-    std::atomic<uint64_t> bytesIn_{0};
-    std::atomic<uint64_t> bytesOut_{0};
-    std::atomic<uint64_t> packetsIn_{0};
-    std::atomic<uint64_t> cryptoFails_{0};
-};
 
 void Usage(const char* prog)
 {
@@ -188,11 +88,11 @@ int main(int argc, char** argv)
 
     orkdemo::InitLogging("03_cpp_host");
 
-    std::printf("=============================================================\n");
+    orkdemo::PrintBannerRule();
     std::printf(" Demo 03 · C++ SDK host (SessionFramework + IHostListener)\n");
     std::printf(" port=%u  encryption=%s  bootstrap=PlaintextDevelopment\n",
                 static_cast<unsigned>(port), encryption ? "on" : "off");
-    std::printf("=============================================================\n");
+    orkdemo::PrintBannerRule();
 
     try
     {
@@ -205,7 +105,8 @@ int main(int argc, char** argv)
 
         // ---- 2. 注册监听器（必须在 Start 之前）--------------------------
         // GetSender() 在 Create 之后就可用，因此 listener 可以直接持有引用。
-        EchoListener listener(framework->GetSender());
+        // verbose=true：demo 要逐帧打印回显（test_cpp_roundtrip 传 false）。
+        orkdemo::EchoListener listener(framework->GetSender(), /*verbose=*/true);
         framework->RegisterListener(&listener);
 
         // ---- 3. 启动 ----------------------------------------------------

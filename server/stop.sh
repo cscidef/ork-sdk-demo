@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PID_FILE="${SCRIPT_DIR}/.server.pid"
 
-if [ ! -f "$PID_FILE" ]; then
+if [[ ! -f "$PID_FILE" ]]; then
     echo "No server PID file found. Server may not be running."
     exit 0
 fi

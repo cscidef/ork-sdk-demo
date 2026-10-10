@@ -45,107 +45,39 @@
  *   ORK_LOG_LEVEL  trace|debug|info|warn|error|off（默认 warn）
  */
 
-#include "ork/sdk/c/ork_abi.h"
+/* demo_support_c.h 已经带进 ork_abi.h / ork_client_abi.h、平台差异宏
+ * （ORK_DEVNULL 等）与全部共享小工具（计时、枚举名、探针帧协议常量）。 */
+#include "demo_support_c.h"
 
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(_WIN32)
-#  include <windows.h>
-#  define ORK_DEVNULL "NUL"
-#else
-#  include <time.h>
-#  define ORK_DEVNULL "/dev/null"
-#endif
-
 /* -------------------------------------------------------------------------- */
 /* 跨线程共享状态                                                              */
 /*                                                                            */
-/* 写者是内部 pump 线程（回调），读者是主线程（心跳打印）。demo 里用 volatile   */
-/* 标量足够；生产代码请换成 <stdatomic.h> 或 C++ std::atomic。                 */
+/* 写者是内部 pump 线程（回调），读者是主线程（心跳打印）—— 这是货真价实的      */
+/* 数据竞争，所以一律用 _Atomic（F26）：volatile 在 C11 里只约束「不被优化掉」， */
+/* 不提供任何原子性 / 内存序保证；64 位计数器在非 x86 上还可能被撕裂读。        */
+/* g_stop 用 _Atomic sig_atomic_t：C11 只保证它在信号处理器里是 lock-free 的。  */
 /* -------------------------------------------------------------------------- */
-static OrkHost             g_host            = NULL;  /* 回调里也要用，故置全局 */
-static volatile sig_atomic_t g_stop          = 0;
-static volatile uint64_t   g_payloads        = 0;     /* 收到的 payload 数 */
-static volatile uint64_t   g_echoed          = 0;     /* 成功回显的 payload 数 */
-static volatile uint64_t   g_send_failures   = 0;
-static volatile uint64_t   g_connections     = 0;     /* 累计接入数 */
-static volatile uint64_t   g_disconnections  = 0;
-static volatile uint64_t   g_bytes_in        = 0;     /* 最近一次 on_stats 快照 */
-static volatile uint64_t   g_bytes_out       = 0;
-static volatile uint64_t   g_packets_in      = 0;
-static volatile uint32_t   g_active          = 0;
+static OrkHost               g_host           = NULL;  /* 回调里也要用，故置全局 */
+static _Atomic sig_atomic_t  g_stop           = 0;
+static _Atomic uint64_t      g_payloads       = 0;     /* 收到的 payload 数 */
+static _Atomic uint64_t      g_echoed         = 0;     /* 成功回显的 payload 数 */
+static _Atomic uint64_t      g_send_failures  = 0;
+static _Atomic uint64_t      g_connections    = 0;     /* 累计接入数 */
+static _Atomic uint64_t      g_disconnections = 0;
+static _Atomic uint64_t      g_bytes_in       = 0;     /* 最近一次 on_stats 快照 */
+static _Atomic uint64_t      g_bytes_out      = 0;
+static _Atomic uint64_t      g_packets_in     = 0;
+static _Atomic uint32_t      g_active         = 0;
 
 /* -------------------------------------------------------------------------- */
-/* 小工具                                                                      */
+/* 小工具（计时 / 枚举名 / 环境变量解析全部来自 demo_support_c.h）              */
 /* -------------------------------------------------------------------------- */
-static double now_ms(void)
-{
-#if defined(_WIN32)
-    return (double)GetTickCount64();
-#else
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1.0e6;
-#endif
-}
-
-static const char* disconnect_reason_name(uint32_t reason)
-{
-    switch ((OrkDisconnectReason)reason)
-    {
-    case OrkDisconnect_PeerClosed:       return "PeerClosed";
-    case OrkDisconnect_Idle:             return "IdleTimeout";
-    case OrkDisconnect_Kicked:           return "Kicked";
-    case OrkDisconnect_ProtocolError:    return "ProtocolError";
-    case OrkDisconnect_Internal:         return "Internal";
-    case OrkDisconnect_BootstrapTimeout: return "BootstrapTimeout";
-    case OrkDisconnect_MaxConnections:   return "MaxConnections";
-    case OrkDisconnect_Unknown:          break;
-    }
-    return "Unknown";
-}
-
-static const char* send_result_name(OrkSendResult r)
-{
-    switch (r)
-    {
-    case OrkSend_Ok:           return "Ok";
-    case OrkSend_TooLarge:     return "TooLarge";
-    case OrkSend_NotConnected: return "NotConnected";
-    case OrkSend_BadState:     return "BadState";
-    case OrkSend_QueueFull:    return "QueueFull";
-    }
-    return "Unknown";
-}
-
-static const char* channel_name(uint32_t channel)
-{
-    return channel == (uint32_t)OrkChannel_Reliable ? "Reliable" : "Unreliable";
-}
-
-static uint32_t env_log_level(void)
-{
-    const char* v = getenv("ORK_LOG_LEVEL");
-    if (v == NULL || *v == '\0') return (uint32_t)OrkLog_Warn;
-    if (strcmp(v, "trace") == 0) return (uint32_t)OrkLog_Trace;
-    if (strcmp(v, "debug") == 0) return (uint32_t)OrkLog_Debug;
-    if (strcmp(v, "info")  == 0) return (uint32_t)OrkLog_Info;
-    if (strcmp(v, "warn")  == 0) return (uint32_t)OrkLog_Warn;
-    if (strcmp(v, "error") == 0) return (uint32_t)OrkLog_Error;
-    if (strcmp(v, "off")   == 0) return (uint32_t)OrkLog_Off;
-    fprintf(stderr, "[host] 忽略无法识别的 ORK_LOG_LEVEL=\"%s\"，回落到 warn\n", v);
-    return (uint32_t)OrkLog_Warn;
-}
-
-static const char* env_log_file(void)
-{
-    const char* v = getenv("ORK_LOG_FILE");
-    return (v != NULL && *v != '\0') ? v : ORK_DEVNULL;
-}
-
 static void on_signal(int sig)
 {
     (void)sig;
@@ -194,7 +126,8 @@ static void on_disconnected(void* user, uint32_t connection_id, uint32_t reason)
     (void)user;
     g_disconnections++;
     printf("[host] - connection %u  reason=%s(%u)  active=%u\n",
-           connection_id, disconnect_reason_name(reason), reason,
+           connection_id,
+           ork_demo_disconnect_reason_name((OrkDisconnectReason)reason), reason,
            ork_host_connection_count(g_host));
     fflush(stdout);
 }
@@ -215,27 +148,29 @@ static void on_payload(void* user, uint32_t connection_id,
     {
         g_send_failures++;
         printf("[host] ! echo to %u failed: %s\n",
-               connection_id, send_result_name(r));
+               connection_id, ork_demo_send_result_name(r));
         fflush(stdout);
         return;
     }
 
     g_echoed++;
 
-    /* 25B "ORKBENCH1" 帧是 Ork 各语言 demo 通用的 opaque 回显探针，
+    /* 25B "ORKBENCH1" 帧是 Ork 各语言 demo 通用的 opaque 回显探针
+     * （帧头 ORK_ECHO_MAGIC_LEN + ORK_MARKER_LEN = 17B，再加 8B 时间戳共 25B），
      * 这里把 marker 打出来方便和 python / C++ 侧对照。 */
-    if (size >= 17 && memcmp(data, "ORKBENCH1", 9) == 0)
+    if (ork_demo_is_echo_magic(data, size))
     {
-        char marker[9];
-        memcpy(marker, data + 9, 8);
-        marker[8] = '\0';
+        char marker[ORK_MARKER_LEN + 1];
+        memcpy(marker, ork_demo_frame_marker(data, size), ORK_MARKER_LEN);
+        marker[ORK_MARKER_LEN] = '\0';
         printf("[host] ~ echo %u B to %u via %s (ORKBENCH1 marker=%s)\n",
-               size, connection_id, channel_name(channel), marker);
+               size, connection_id,
+               ork_demo_channel_name((OrkChannel)channel), marker);
     }
     else
     {
         printf("[host] ~ echo %u B to %u via %s\n",
-               size, connection_id, channel_name(channel));
+               size, connection_id, ork_demo_channel_name((OrkChannel)channel));
     }
     fflush(stdout);
 }
@@ -284,13 +219,13 @@ int main(int argc, char** argv)
         port = (uint16_t)p;
     }
 
-    printf("=============================================================\n");
+    printf(ORK_BANNER_RULE "\n");
     printf(" Demo 01 · C ABI echo server (pure C11)\n");
     printf(" C ABI version = %u (header expects %u)\n",
            ork_abi_version(), (unsigned)ORK_ABI_VERSION);
     printf(" sizeof(OrkHostConfig)=%zu  sizeof(OrkHostCallbacks)=%zu\n",
            sizeof(OrkHostConfig), sizeof(OrkHostCallbacks));
-    printf("=============================================================\n");
+    printf(ORK_BANNER_RULE "\n");
 
     if (ork_abi_version() != ORK_ABI_VERSION)
     {
@@ -312,8 +247,8 @@ int main(int argc, char** argv)
     cfg.outbound_queue_capacity = 0;  /* 0 = 用 SDK 默认 */
     cfg.inbound_queue_capacity  = 0;
     cfg.drive_mode          = 0;      /* 0 = Internal（内部 pump 线程）；1 会被 create 拒绝 */
-    cfg.log_path            = env_log_file();
-    cfg.log_level           = env_log_level();
+    cfg.log_path            = ork_demo_env_log_file();
+    cfg.log_level           = ork_demo_env_log_level("host");
 
     OrkHostCallbacks cb = ORK_HOST_CALLBACKS_INIT;
     cb.user             = NULL;       /* demo 用全局变量，故无需上下文指针 */
@@ -359,8 +294,8 @@ int main(int argc, char** argv)
     fflush(stdout);
 
     /* ---- 4. 主循环 ----------------------------------------------------- */
-    const double t0 = now_ms();
-    double last_report = t0;
+    const uint64_t t0 = ork_demo_now_ms();
+    uint64_t last_report = t0;
 
     while (!g_stop)
     {
@@ -372,11 +307,11 @@ int main(int argc, char** argv)
             break;
         }
 
-        const double t = now_ms();
-        if (t - last_report >= 10000.0)
+        const uint64_t t = ork_demo_now_ms();
+        if (t - last_report >= 10000u)
         {
             last_report = t;
-            print_status(t - t0);
+            print_status((double)(t - t0));
         }
     }
 
@@ -389,7 +324,7 @@ int main(int argc, char** argv)
         fprintf(stderr, "[host] ork_host_stop 返回 code=%d detail=%s\n",
                 (int)err, ork_last_error());
 
-    print_status(now_ms() - t0);
+    print_status((double)(ork_demo_now_ms() - t0));
 
     ork_host_destroy(g_host);
     g_host = NULL;

@@ -89,11 +89,9 @@ and into `cpp/lib/<os>-<arch>/` for the C++ static libraries. See
 [`server/linux-x64/README.md`](server/linux-x64/README.md) and
 [`server/windows-x64/README.md`](server/windows-x64/README.md).
 
-Check your platform any time:
-
-```bash
-bash scripts/check_platform.sh      # prints e.g. "macos-arm64", exits 1 if unsupported
-```
+Platform detection lives in [`server/start.sh`](server/start.sh): it maps `uname -s` /
+`uname -m` onto the matching `server/<platform>/` directory and exits with a clear error
+on anything unsupported.
 
 ---
 
@@ -169,8 +167,7 @@ ork-sdk-demo/
 ├── go/                        🚧 reserved — CGo binding plan
 ├── csharp/                    🚧 reserved — .NET P/Invoke plan (Unity bindings live in main repo)
 └── scripts/
-    ├── run_all_tests.sh         unified pipeline: Python + C++
-    ├── check_platform.sh        OS/arch detection → server/ subdir name
+    ├── run_all_tests.sh         unified pipeline: Python + C++ (what `make test` runs)
     └── pack_server.sh           repack embed_minimal from a harmonia_ork build tree
 ```
 
@@ -222,7 +219,7 @@ process on an ephemeral port, so they need no external server.
 Everything at once:
 
 ```bash
-make test-all                 # or: bash scripts/run_all_tests.sh
+make test                     # or directly: bash scripts/run_all_tests.sh
 ```
 
 The runner reports `[PASS]` / `[FAIL]` / `[SKIP]` per language and exits non-zero if
@@ -234,7 +231,6 @@ Per language:
 ```bash
 make test-python              # pytest, 56 tests (offline + online; auto start/stop server)
 make test-cpp                 # cmake configure + build + ctest, 3 suites / 136 checks
-make test                     # both, sequentially
 ```
 
 Or directly:
@@ -242,7 +238,7 @@ Or directly:
 ```bash
 cd python && .venv/bin/python -m pytest tests/ -v
 cd python && .venv/bin/python -m pytest tests/test_frame_codec.py tests/test_cipher.py -v   # offline only
-cd cpp && cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build -j && (cd build && ctest --output-on-failure)
+cd cpp && cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build -j4 && (cd build && ctest --output-on-failure)
 ```
 
 | Suite | Count | Needs server? |
@@ -268,7 +264,8 @@ ORK_ROOT=/path/to/harmonia_ork make pack-server
 otool -L server/macos-arm64/bin/embed_minimal
 ```
 
-`scripts/pack_server.sh` copies every non-system dylib into `server/macos-arm64/lib/`,
+`scripts/pack_server.sh` needs `ORK_ROOT` (it fails fast with a usage hint when unset);
+it copies every non-system dylib into `server/macos-arm64/lib/`,
 rewrites install names to `@executable_path/../lib` (binary) and `@loader_path` (sibling
 dylibs), then applies an ad-hoc `codesign` — mandatory on arm64 after `install_name_tool`.
 
@@ -334,11 +331,12 @@ See [`server/README.md`](server/README.md).
 ```bash
 make help           # list all targets
 make setup          # Python venv + deps + KCP bridge + offline self-check
-make pack-server    # repack embed_minimal from a harmonia_ork build
+make pack-server    # repack embed_minimal from a harmonia_ork build (needs ORK_ROOT)
 make server-start   # start the demo server in the background
 make server-stop    # graceful stop (SIGTERM, then SIGKILL after 5 s)
-make test           # Python + C++ tests
-make test-all       # same, via scripts/run_all_tests.sh with a pass/fail/skip summary
+make test           # Python + C++ via scripts/run_all_tests.sh (pass/fail/skip summary)
+make test-python    # Python tests only
+make test-cpp       # C++ tests only
 make demo-echo      # start server → run Python echo demo → stop server
 make clean          # remove venv, build dirs, server runtime files
 ```

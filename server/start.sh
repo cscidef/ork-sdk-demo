@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PID_FILE="${SCRIPT_DIR}/.server.pid"
 LOG_FILE="${SCRIPT_DIR}/server.log"
 
-# Detect platform
+# Detect platform (this is the single place platform detection lives)
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 case "${OS}-${ARCH}" in
@@ -16,14 +16,14 @@ esac
 
 BIN="${SCRIPT_DIR}/${PLATFORM}/bin/embed_minimal"
 
-if [ ! -f "$BIN" ]; then
+if [[ ! -f "$BIN" ]]; then
     echo "ERROR: Server binary not found: $BIN"
     echo "Run scripts/pack_server.sh first, or see server/${PLATFORM}/README.md"
     exit 1
 fi
 
 # Check if already running
-if [ -f "$PID_FILE" ]; then
+if [[ -f "$PID_FILE" ]]; then
     OLD_PID=$(cat "$PID_FILE")
     if kill -0 "$OLD_PID" 2>/dev/null; then
         echo "Server already running (PID $OLD_PID). Use stop.sh first."

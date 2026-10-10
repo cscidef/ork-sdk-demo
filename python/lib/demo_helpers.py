@@ -12,6 +12,7 @@ from __future__ import annotations
 import statistics
 import sys
 import time
+from dataclasses import dataclass, field
 
 from .ork_client_session import OrkClientSession
 
@@ -23,6 +24,7 @@ ECHO_FRAME_SIZE = 25
 RELIABLE_ECHO_TIMEOUT = 5.0   # KCP 可靠通道单轮等待（秒）
 UDP_ECHO_TIMEOUT = 1.0        # UDP 不可靠通道单次尝试等待（秒）
 UDP_ECHO_ATTEMPTS = 3         # UDP 允许少量重发
+PER_ITER_TIMEOUT = 1.0        # run_channel 单次发送的回显等待窗口（秒）
 
 
 def marker_int(marker: bytes) -> int:
@@ -155,6 +157,57 @@ def echo_once_unreliable(
         if hit is not None:
             return (time.perf_counter_ns() - hit) / 1e6
     return None
+
+
+# --------------------------------------------------------------------------- #
+# 单通道批量 echo（送达率 + RTT 采样）
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class ChannelResult:
+    """run_channel 的结果：按字段名访问，杜绝 (delivered, rtts) 顺序误赋值。"""
+
+    delivered: int = 0
+    rtts: list[float] = field(default_factory=list)
+
+
+def run_channel(
+    session: OrkClientSession,
+    *,
+    reliable: bool,
+    base_seq: int,
+    iterations: int,
+    warmup: int = 0,
+    per_iter_timeout: float = PER_ITER_TIMEOUT,
+) -> ChannelResult:
+    """在单个通道上单发单收 iterations 次，收集送达计数与 RTT(ms) 采样。
+
+    统一 demo 02（送达率对比）与 demo 06（时延测量）此前各自实现、返回顺序相反
+    的两套逻辑，避免 (delivered, rtts) / (rtts, delivered) 静默错配。
+
+    Args:
+        reliable: True 走 Reliable(KCP)，False 走 Unreliable(UDP)。
+        base_seq: 首个 seq；后续按 base_seq + i 递增。
+        iterations: 发送次数。
+        warmup: 前若干次不计入 RTT 样本（仍计入 delivered）；默认 0。
+        per_iter_timeout: 单次发送的回显等待窗口（秒）。
+    """
+    result = ChannelResult()
+    for i in range(iterations):
+        seq = base_seq + i
+        ts = time.perf_counter_ns()
+        if reliable:
+            session.send_bench_reliable(seq, ts)
+        else:
+            session.send_bench_unreliable(seq, ts)
+        hit = wait_echo(session, reliable=reliable, want_seq=seq,
+                        sent_ts={ts}, timeout=per_iter_timeout)
+        if hit is not None:
+            result.delivered += 1
+            if i >= warmup:
+                result.rtts.append((time.perf_counter_ns() - hit) / 1e6)
+    return result
 
 
 # --------------------------------------------------------------------------- #

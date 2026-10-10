@@ -6,7 +6,3 @@ PyNaCl>=1.5.0
 
 # 测试框架（离线单元测试 + 在线集成测试）
 pytest>=8.0
-
-# 精简版传输库为「全 opaque、零 protobuf」路径，运行 demos/tests 并不需要
-# protobuf；此处保留仅为与上游 SDK 依赖基线对齐、方便后续扩展 proto 示例。
-protobuf>=4.0.0

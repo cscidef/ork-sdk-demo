@@ -1,7 +1,7 @@
 # Golden 向量输入说明（冻结）
 
-本目录 hex 由 `testdata/generate.py` 生成，输入参数固定如下，改动即破坏与 C++
-参考实现的逐字节对齐。
+本目录 hex 由 `testdata/generate.py` 生成，输入参数固定于 `tests/vectors.py`，
+改动即破坏与 C++ 参考实现的逐字节对齐。
 
 ## bootstrap_v2.hex（109B）
 

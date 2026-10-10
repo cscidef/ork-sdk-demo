@@ -17,8 +17,9 @@ golden/
     cipher_seal.hex           —— 已知密钥/明文下 seal() 的确定性 AEAD 输出
     INPUTS.md                 —— 冻结上述向量所用的精确输入参数
 
-golden 向量与 lib/ork_frame._self_test / lib/ork_cipher._smoke_test 内联常量一致，
-且与 C++ bootstrap_v2_test.cpp / ork_handshake_v2_test.cpp 逐字节对齐。
+所有输入参数统一来自 tests/vectors.py（单一来源），golden 向量与
+tests/test_frame_codec.py / test_cipher.py 及 C++ bootstrap_v2_test.cpp /
+ork_handshake_v2_test.cpp / ork_cipher_test.cpp 逐字节对齐。
 """
 
 from __future__ import annotations
@@ -28,49 +29,22 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent          # .../testdata
 PYTHON_DIR = HERE.parent                         # .../python
-if str(PYTHON_DIR) not in sys.path:
-    sys.path.insert(0, str(PYTHON_DIR))
+TESTS_DIR = PYTHON_DIR / "tests"                 # .../python/tests（vectors.py 所在）
+for _p in (PYTHON_DIR, TESTS_DIR):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
+import vectors as V                   # noqa: E402
 from lib import ork_cipher as C       # noqa: E402
 from lib import ork_frame as F        # noqa: E402
-
-PAYLOAD_SIZES = [1, 64, 512, 1200]
-
-
-def _pattern(n: int) -> bytes:
-    return bytes((i * 31 + 7) & 0xFF for i in range(n))
 
 
 def gen_payloads(payloads_dir: Path) -> None:
     payloads_dir.mkdir(parents=True, exist_ok=True)
-    for n in PAYLOAD_SIZES:
+    for n in V.PAYLOAD_SIZES:
         p = payloads_dir / f"payload_{n}.bin"
-        p.write_bytes(_pattern(n))
+        p.write_bytes(V.payload_pattern(n))
         print(f"  ✓ {p.relative_to(HERE)}  ({n}B)")
-
-
-# ── golden 向量的冻结输入（与 tests 内常量保持一致）──────────────────────────
-BOOTSTRAP_INPUTS = dict(
-    connection_id=10,
-    session_token=0xDEADBEEF,
-    bootstrap_epoch=bytes(range(16)),
-    c2s_key=bytes(range(0x20, 0x40)),
-    s2c_key=bytes(range(0x40, 0x60)),
-    expire_at_ms=1790000000000,
-    flags=0x01,
-)
-HS_C2S_KEY = bytes(range(0x20, 0x40))
-HS_EPOCH = bytes(range(16))
-HS_NONCE = bytes(range(0x10, 0x20))
-HS_CONN = 10
-CIPHER_STATE = dict(
-    c2s_key=bytes([0x11] * 32),
-    s2c_key=bytes([0x22] * 32),
-    connection_id=0x12345678,
-    session_token=0xAABBCCDD,
-    encryption_required=True,
-)
-CIPHER_PLAIN = bytes([0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02])
 
 
 def _write_hex(golden_dir: Path, name: str, data: bytes) -> None:
@@ -81,18 +55,22 @@ def _write_hex(golden_dir: Path, name: str, data: bytes) -> None:
 def gen_golden(golden_dir: Path) -> None:
     golden_dir.mkdir(parents=True, exist_ok=True)
 
-    bootstrap = F.encode_bootstrap_frame(**BOOTSTRAP_INPUTS)
+    bootstrap = F.encode_bootstrap_frame(**V.BOOTSTRAP_INPUTS)
     assert len(bootstrap) == F.BOOTSTRAP_FRAME_SIZE
     _write_hex(golden_dir, "bootstrap_v2.hex", bootstrap)
 
-    hs0 = F.build_handshake_v2_packet(HS_CONN, HS_NONCE, 0, HS_EPOCH, HS_C2S_KEY)
-    hs1 = F.build_handshake_v2_packet(HS_CONN, HS_NONCE, 1, HS_EPOCH, HS_C2S_KEY)
+    hs0 = F.build_handshake_v2_packet(
+        V.HANDSHAKE_CONNECTION_ID, V.HANDSHAKE_NONCE, 0, V.HANDSHAKE_EPOCH, V.HANDSHAKE_C2S_KEY
+    )
+    hs1 = F.build_handshake_v2_packet(
+        V.HANDSHAKE_CONNECTION_ID, V.HANDSHAKE_NONCE, 1, V.HANDSHAKE_EPOCH, V.HANDSHAKE_C2S_KEY
+    )
     assert len(hs0) == len(hs1) == F.UDP_HANDSHAKE_V2_SIZE
     _write_hex(golden_dir, "handshake_v2_counter0.hex", hs0)
     _write_hex(golden_dir, "handshake_v2_counter1.hex", hs1)
 
-    st = C.CipherState(**CIPHER_STATE)
-    sealed = C.seal(st, C.CHANNEL_RUDP, C.C2S, 5, CIPHER_PLAIN)
+    st = C.CipherState(**V.CIPHER_STATE)
+    sealed = C.seal(st, C.CHANNEL_RUDP, C.C2S, 5, V.CIPHER_PLAIN)
     assert sealed is not None
     _write_hex(golden_dir, "cipher_seal.hex", sealed)
 
@@ -102,8 +80,8 @@ def gen_golden(golden_dir: Path) -> None:
 def _write_inputs_doc(golden_dir: Path, bootstrap: bytes, hs0: bytes, sealed: bytes) -> None:
     doc = f"""# Golden 向量输入说明（冻结）
 
-本目录 hex 由 `testdata/generate.py` 生成，输入参数固定如下，改动即破坏与 C++
-参考实现的逐字节对齐。
+本目录 hex 由 `testdata/generate.py` 生成，输入参数固定于 `tests/vectors.py`，
+改动即破坏与 C++ 参考实现的逐字节对齐。
 
 ## bootstrap_v2.hex（{len(bootstrap)}B）
 

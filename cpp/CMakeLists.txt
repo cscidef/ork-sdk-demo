@@ -100,14 +100,7 @@ enable_testing()
 add_subdirectory(demos)
 add_subdirectory(tests)
 
-message(STATUS "-----------------------------------------------------------")
-message(STATUS " Ork C/C++ demos — configure summary")
-message(STATUS "   triplet    : ${ORK_PLATFORM}")
-message(STATUS "   C ABI ver  : ${ORK_ABI_VERSION}")
-message(STATUS "   headers    : ${ORK_INCLUDE_DIR}")
-message(STATUS "   vendored   : ${ORK_THIRDPARTY_INCLUDE_DIR}")
-message(STATUS "   libraries  : ${ORK_LIBRARY_DIR}")
-message(STATUS "   OpenSSL    : ${OPENSSL_VERSION}")
-message(STATUS "   libsodium  : ${SODIUM_LIBRARY}")
-message(STATUS "   binaries   : ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
-message(STATUS "-----------------------------------------------------------")
+# triplet / ABI 版本 / 头文件 / vendored / 库路径 / OpenSSL / libsodium 这一整套
+# configure summary 由 cmake/FindOrk.cmake 在 find_package(Ork) 时打印，这里不再
+# 重复一遍（F23）。只有产物目录是 FindOrk 无从得知的：它在 find_package 之后才设置。
+message(STATUS "Ork C/C++ demos — binaries: ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")

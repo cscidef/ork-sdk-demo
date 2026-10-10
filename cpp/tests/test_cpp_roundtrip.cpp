@@ -12,7 +12,12 @@
  *   5. IConnectionRegistry 侧证据：Count()==1、ConnectionView.encryptionActive
  *      ==true、linkState==Established；
  *   6. host 侧 payloads==2 / echoed==2 / failures==0 / cryptoFails==0；
- *   7. Disconnect + Stop + RegisterListener(nullptr) 干净收尾（不 hang、不崩）。
+ *   7. finish() 统一收尾：Disconnect + Stop + RegisterListener(nullptr)
+ *      不 hang、不崩 —— 成功路径与异常路径共用同一份清理代码。
+ *
+ * 监听器（EchoListener / EchoProbeListener）、双通道探针循环
+ * （RunDualChannelProbe）与断言框架（ork_test_assert.h）都来自共享头，
+ * 本文件只剩「跑一遍真实往返 + 收集证据」。
  *
  * 端口在运行时向 OS 申请（TCP+UDP 同时空闲），所以可以 `ctest -j8` 并行，
  * 也不会和 9400 上手工跑的 demo 抢端口。
@@ -22,198 +27,59 @@
 
 #include "demo_support.hpp"
 
+#include "ork_test_assert.h"        // CHECK / CHECK_EQ / ORK_BANNER_RULE
+
 #include "ork/client/ork_client.hpp"
-#include "ork/sdk/host_listener.hpp"
-#include "ork/sdk/sender.hpp"
 #include "ork/sdk/sdk/session_interface.hpp"
 
-#include <array>
-#include <atomic>
-#include <cstdint>
 #include <cstdio>
-#include <cstring>
 #include <memory>
-#include <span>
 #include <string>
-#include <vector>
 
 namespace {
 
 // ============================================================================
-// 极简断言框架（与两个纯 C 测试风格一致）
-// ============================================================================
-int g_checks   = 0;
-int g_failures = 0;
-
-void Check(bool cond, const char* label, int line)
-{
-    ++g_checks;
-    if (cond)
-    {
-        std::printf("  [ok]   %s\n", label);
-    }
-    else
-    {
-        ++g_failures;
-        std::printf("  [FAIL] %s   (line %d)\n", label, line);
-    }
-    std::fflush(stdout);
-}
-#define CHECK(cond, label) Check(static_cast<bool>(cond), (label), __LINE__)
-
-void CheckEqU64(uint64_t actual, uint64_t expected, const char* label, int line)
-{
-    ++g_checks;
-    if (actual == expected)
-    {
-        std::printf("  [ok]   %s (= %llu)\n", label,
-                    static_cast<unsigned long long>(actual));
-    }
-    else
-    {
-        ++g_failures;
-        std::printf("  [FAIL] %s: got %llu, expected %llu   (line %d)\n", label,
-                    static_cast<unsigned long long>(actual),
-                    static_cast<unsigned long long>(expected), line);
-    }
-    std::fflush(stdout);
-}
-#define CHECK_EQ(actual, expected, label) \
-    CheckEqU64(static_cast<uint64_t>(actual), static_cast<uint64_t>(expected), (label), __LINE__)
-
-// ============================================================================
-// 服务端监听器：收到什么就原样、同通道送回去（与 demo 03 的 EchoListener 同构，
-// 但这里只统计，不打业务日志，保持 ctest 输出干净）
-// ============================================================================
-class EchoListener final : public ork::sdk::IHostListener
-{
-public:
-    explicit EchoListener(ork::sdk::ISender& sender) noexcept : sender_(sender) {}
-
-    void OnConnected(ConnectionId connectionId) override
-    {
-        lastConnectionId_.store(connectionId, std::memory_order_relaxed);
-        connections_.fetch_add(1, std::memory_order_relaxed);
-    }
-
-    void OnDisconnected(ConnectionId, DisconnectReason) override
-    {
-        disconnections_.fetch_add(1, std::memory_order_relaxed);
-    }
-
-    void OnPayload(ConnectionId connectionId,
-                   ork::sdk::Channel channel,
-                   std::span<const uint8_t> payload) override
-    {
-        payloads_.fetch_add(1, std::memory_order_relaxed);
-
-        // ★ 回调跑在 core 内部 pump 线程上；ISender::Send 只入队，回调内安全。
-        const ork::sdk::SendResult r = sender_.Send(connectionId, payload, channel);
-        if (r != ork::sdk::SendResult::Ok)
-            failures_.fetch_add(1, std::memory_order_relaxed);
-        else
-            echoed_.fetch_add(1, std::memory_order_relaxed);
-    }
-
-    void OnStats(const ork::sdk::OrkStats& stats) override
-    {
-        cryptoFails_.store(stats.cryptoFailAead + stats.cryptoFailReplay
-                           + stats.cryptoFailExpired + stats.cryptoFailMalformed,
-                           std::memory_order_relaxed);
-        bytesIn_.store(stats.bytesIn, std::memory_order_relaxed);
-        bytesOut_.store(stats.bytesOut, std::memory_order_relaxed);
-        statsSeen_.fetch_add(1, std::memory_order_relaxed);
-    }
-
-    uint64_t connections()      const noexcept { return connections_.load(std::memory_order_relaxed); }
-    uint64_t disconnections()   const noexcept { return disconnections_.load(std::memory_order_relaxed); }
-    uint64_t payloads()         const noexcept { return payloads_.load(std::memory_order_relaxed); }
-    uint64_t echoed()           const noexcept { return echoed_.load(std::memory_order_relaxed); }
-    uint64_t failures()         const noexcept { return failures_.load(std::memory_order_relaxed); }
-    uint64_t cryptoFails()      const noexcept { return cryptoFails_.load(std::memory_order_relaxed); }
-    uint64_t bytesIn()          const noexcept { return bytesIn_.load(std::memory_order_relaxed); }
-    uint64_t bytesOut()         const noexcept { return bytesOut_.load(std::memory_order_relaxed); }
-    uint64_t statsSeen()        const noexcept { return statsSeen_.load(std::memory_order_relaxed); }
-    uint32_t lastConnectionId() const noexcept { return lastConnectionId_.load(std::memory_order_relaxed); }
-
-private:
-    ork::sdk::ISender& sender_;
-
-    std::atomic<uint64_t> connections_{0};
-    std::atomic<uint64_t> disconnections_{0};
-    std::atomic<uint64_t> payloads_{0};
-    std::atomic<uint64_t> echoed_{0};
-    std::atomic<uint64_t> failures_{0};
-    std::atomic<uint64_t> cryptoFails_{0};
-    std::atomic<uint64_t> bytesIn_{0};
-    std::atomic<uint64_t> bytesOut_{0};
-    std::atomic<uint64_t> statsSeen_{0};
-    std::atomic<uint32_t> lastConnectionId_{0};
-};
-
-// ============================================================================
-// 客户端监听器：记录状态迁移 + 逐字节比对回显
+// 双通道探针的 Driver 适配（F2）
 //
-// 线程契约：OrkClient 没有内部线程，回调都在 PumpOnce()/Disconnect() 的调用栈内
-// 触发（本测试全部在主线程），所以普通成员变量就够，不需要 atomic。
+// 循环节奏（先发 Reliable、Unreliable 按 150ms 重试至多 8 次、上一轮回显到手
+// 才发下一轮）由 orkdemo::RunDualChannelProbe 统一给出，这里只回答
+// 「怎么 pump、怎么发、怎么打印」。
 // ============================================================================
-class RoundtripListener final : public ork::client::IClientListener
+struct RoundtripProbeDriver
 {
-public:
-    void OnConnected(uint32_t connectionId) override
+    ork::client::OrkClient&     client;
+    orkdemo::EchoProbeListener& probe;
+
+    bool ShouldStop()   const { return false; }   // 测试不响应 Ctrl+C
+    bool Pump()               { client.PumpOnce(); return true; }
+    void OnTick()             { }                 // 不打状态迁移，保持 ctest 输出干净
+    bool Connected()    const { return client.GetState() == ork::client::ClientState::Connected; }
+    bool Disconnected() const { return false; }   // 靠超时兜底，与改造前一致
+    bool ReliableEchoed()   const { return probe.reliableEcho(); }
+    bool UnreliableEchoed() const { return probe.unreliableEcho(); }
+    void ClearReliableEcho()      { probe.clearReliableEcho(); }
+
+    // 两帧探针在 EchoProbeListener 构造时就已就位，这里**不重盖时间戳**：
+    // Unreliable 会重试，重盖会让上一帧的迟到回显被误判成 mismatch。
+    bool SendReliable(int /*round*/)
     {
-        connectionId_ = connectionId;
-        connected_    = true;
-        states_.emplace_back("Connected");
+        const ork::client::SendResult r =
+            client.Send(probe.frameReliable(), TransportChannel::Reliable);
+        std::printf("      -> Reliable   %zu B send=%s\n",
+                    probe.frameReliable().size(),
+                    std::string(ork::platform::ToString(r)).c_str());
+        return r == ork::client::SendResult::Ok;
     }
 
-    void OnDisconnected(uint32_t reason) override
+    bool SendUnreliable(int attempt)
     {
-        disconnectReason_ = reason;
-        disconnected_     = true;
+        const ork::client::SendResult r =
+            client.Send(probe.frameUnreliable(), TransportChannel::Unreliable);
+        std::printf("      -> Unreliable %zu B attempt=%d send=%s\n",
+                    probe.frameUnreliable().size(), attempt,
+                    std::string(ork::platform::ToString(r)).c_str());
+        return r == ork::client::SendResult::Ok;
     }
-
-    void OnPayload(std::span<const uint8_t> data, TransportChannel channel) override
-    {
-        ++payloads_;
-        const bool reliable = (channel == TransportChannel::Reliable);
-        const std::span<const uint8_t> expect =
-            reliable ? std::span<const uint8_t>(frameReliable_)
-                     : std::span<const uint8_t>(frameUnreliable_);
-
-        if (data.size() != expect.size()
-            || std::memcmp(data.data(), expect.data(), expect.size()) != 0)
-        {
-            ++mismatches_;
-            return;
-        }
-        if (reliable) reliableEcho_ = true; else unreliableEcho_ = true;
-    }
-
-    // ---- 主线程读写 ----
-    bool     connected()        const noexcept { return connected_; }
-    bool     disconnected()     const noexcept { return disconnected_; }
-    bool     reliableEcho()     const noexcept { return reliableEcho_; }
-    bool     unreliableEcho()   const noexcept { return unreliableEcho_; }
-    uint32_t connectionId()     const noexcept { return connectionId_; }
-    uint32_t disconnectReason() const noexcept { return disconnectReason_; }
-    uint64_t payloads()         const noexcept { return payloads_; }
-    uint64_t mismatches()       const noexcept { return mismatches_; }
-    const std::vector<std::string>& states() const noexcept { return states_; }
-
-    std::array<uint8_t, orkdemo::kEchoFrameSize> frameReliable_{};
-    std::array<uint8_t, orkdemo::kEchoFrameSize> frameUnreliable_{};
-
-private:
-    bool     connected_        = false;
-    bool     disconnected_     = false;
-    bool     reliableEcho_     = false;
-    bool     unreliableEcho_   = false;
-    uint32_t connectionId_     = 0;
-    uint32_t disconnectReason_ = 0;
-    uint64_t payloads_         = 0;
-    uint64_t mismatches_       = 0;
-    std::vector<std::string> states_;
 };
 
 }  // namespace
@@ -225,22 +91,28 @@ int main()
     //   ORK_LOG_FILE=/tmp/ork.log ORK_LOG_LEVEL=debug ./test_cpp_roundtrip
     orkdemo::InitLogging("test_cpp_roundtrip", LogLevel::Off);
 
-    std::printf("=============================================================\n");
-    std::printf(" test_cpp_roundtrip · C++ SDK host + client in one process\n");
-    std::printf("=============================================================\n");
+    orkdemo::PrintBanner("test_cpp_roundtrip · C++ SDK host + client in one process");
 
-    // 失败也要把 host/client 收尾干净，用 RAII + 提前 return 的组合。
-    std::unique_ptr<SessionFramework> framework;
-    std::unique_ptr<EchoListener>     listener;
-    std::unique_ptr<asio::io_context> io;
+    // 失败也要把 host/client 收尾干净：清理只写一遍（下面的 finish），
+    // 成功路径与异常路径都走它。
+    std::unique_ptr<SessionFramework>       framework;
+    std::unique_ptr<orkdemo::EchoListener>  listener;
+    std::unique_ptr<asio::io_context>       io;
     std::unique_ptr<ork::client::OrkClient> client;
     bool clientAlive = false;
     bool hostStarted = false;
 
+    // 声明在 try 之外：异常路径上 finish() 里的 Disconnect() 仍可能触发回调，
+    // 监听器必须活到 client 析构之后。verbose=false → 只统计，不打业务日志。
+    orkdemo::EchoProbeListener cl(/*verbose=*/false);
+
     auto finish = [&](int code) -> int {
+        const bool didTeardown = (framework != nullptr) || clientAlive;
+
         if (clientAlive)
         {
-            client->Disconnect();
+            // 成功路径上主流程已经 Disconnect 过了，别重复调
+            if (!cl.disconnected()) client->Disconnect();
             // 把 Disconnect 的异步收尾 pump 干净，避免析构时还有 in-flight 回调
             for (int i = 0; i < 40; ++i) { client->PumpOnce(); orkdemo::SleepMs(5); }
             client.reset();
@@ -250,19 +122,24 @@ int main()
         if (framework)
         {
             if (hostStarted) framework->Stop();
-            framework->RegisterListener(nullptr);   // 先摘监听再析构
+            framework->RegisterListener(nullptr);   // 先摘监听再析构，杜绝悬垂回调
             framework.reset();
         }
         listener.reset();
 
-        std::printf("\n=============================================================\n");
+        // 走到这里说明整条拆除链没 hang、没崩。
+        // 端口都没申请到就早退的路径上，这条断言没有意义，不刷。
+        if (didTeardown)
+            CHECK(true, "Stop + RegisterListener(nullptr) + 析构未 hang / 未崩");
+
+        std::printf("\n" ORK_BANNER_RULE "\n");
         if (code == 0)
             std::printf("PASS: test_cpp_roundtrip  (%d/%d checks)\n",
                         g_checks - g_failures, g_checks);
         else
             std::printf("FAIL: test_cpp_roundtrip  (%d failures / %d checks)\n",
                         g_failures, g_checks);
-        std::printf("=============================================================\n");
+        std::printf(ORK_BANNER_RULE "\n");
         return code;
     };
 
@@ -281,7 +158,8 @@ int main()
         CHECK(framework != nullptr, "SessionFramework::Create 返回非空");
         if (!framework) return finish(1);
 
-        listener = std::make_unique<EchoListener>(framework->GetSender());
+        listener = std::make_unique<orkdemo::EchoListener>(framework->GetSender(),
+                                                           /*verbose=*/false);
         framework->RegisterListener(listener.get());
         framework->Start();
         hostStarted = true;
@@ -297,10 +175,6 @@ int main()
             *io, orkdemo::MakeClientConfig("127.0.0.1", port, /*encryption=*/true));
         clientAlive = true;
 
-        RoundtripListener cl;
-        orkdemo::BuildEchoFrame(cl.frameReliable_,   orkdemo::kMarkerReliable);
-        orkdemo::BuildEchoFrame(cl.frameUnreliable_, orkdemo::kMarkerUnreliable);
-
         CHECK(client->GetState() == ork::client::ClientState::Disconnected,
               "客户端初始状态 == Disconnected");
 
@@ -308,45 +182,16 @@ int main()
 
         // ---- 4. 手动驱动 + 双通道探针 ------------------------------------
         std::printf("\n[3] Reliable(KCP) + Unreliable(UDP) 回显\n");
-        const double deadline = orkdemo::NowMs() + 20000.0;   // ctest TIMEOUT=120s，足够
-        bool sentReliable = false;
-        int  udpAttempts  = 0;
-        double nextUdpAt  = 0.0;
+        RoundtripProbeDriver drv{*client, cl};
+        orkdemo::DualChannelProbeParams params;
+        params.timeoutMs = 20000;   // ctest TIMEOUT=120s，足够
+        const orkdemo::DualChannelProbeResult probe =
+            orkdemo::RunDualChannelProbe(drv, params);
 
-        while (orkdemo::NowMs() < deadline)
-        {
-            client->PumpOnce();
-
-            if (client->GetState() == ork::client::ClientState::Connected)
-            {
-                if (!sentReliable)
-                {
-                    const ork::client::SendResult r = client->Send(
-                        cl.frameReliable_, TransportChannel::Reliable);
-                    sentReliable = (r == ork::client::SendResult::Ok);
-                    std::printf("      -> Reliable   %zu B send=%s\n",
-                                cl.frameReliable_.size(),
-                                std::string(ork::platform::ToString(r)).c_str());
-                }
-                // UDP 路由在握手刚完成时可能还没就绪：150ms 一次，最多 8 次
-                if (!cl.unreliableEcho() && udpAttempts < 8 && orkdemo::NowMs() >= nextUdpAt)
-                {
-                    const ork::client::SendResult r = client->Send(
-                        cl.frameUnreliable_, TransportChannel::Unreliable);
-                    ++udpAttempts;
-                    nextUdpAt = orkdemo::NowMs() + 150.0;
-                    std::printf("      -> Unreliable %zu B attempt=%d send=%s\n",
-                                cl.frameUnreliable_.size(), udpAttempts,
-                                std::string(ork::platform::ToString(r)).c_str());
-                }
-                if (cl.reliableEcho() && cl.unreliableEcho()) break;
-            }
-            orkdemo::SleepMs(5);
-        }
-
+        CHECK(!probe.timedOut,     "双通道探针在 20s 内收敛");
         CHECK(cl.connected(),      "客户端进入 Connected");
-        CHECK(cl.reliableEcho(),   "★ Reliable(KCP) 25B 回显逐字节一致");
-        CHECK(cl.unreliableEcho(), "★ Unreliable(UDP) 25B 回显逐字节一致");
+        CHECK(probe.reliableOk,    "★ Reliable(KCP) 25B 回显逐字节一致");
+        CHECK(probe.unreliableOk,  "★ Unreliable(UDP) 25B 回显逐字节一致");
         CHECK_EQ(cl.mismatches(),  0u, "客户端无字节不一致");
         CHECK_EQ(cl.payloads(),    2u, "客户端恰好收到 2 帧回显");
         CHECK(cl.connectionId() != 0u, "客户端拿到非零 connectionId");
@@ -383,6 +228,8 @@ int main()
         CHECK_EQ(registry.Snapshot().size(), 1u, "registry.Snapshot().size() == 1");
 
         // ---- 6. 干净收尾 -------------------------------------------------
+        // 只有「必须在 framework->Stop() 之前查」的两条断言留在这里，
+        // 真正的拆除动作全部交给 finish()（F11：不再内联重写一遍）。
         std::printf("\n[5] 收尾\n");
         client->Disconnect();
         for (int i = 0; i < 40 && !cl.disconnected(); ++i)
@@ -390,9 +237,6 @@ int main()
             client->PumpOnce();
             orkdemo::SleepMs(5);
         }
-        client.reset();
-        clientAlive = false;
-        io.reset();
         CHECK(cl.disconnected(), "客户端 OnDisconnected 已触发");
 
         // host 侧断开通知是异步的，等一下再查计数
@@ -400,13 +244,6 @@ int main()
         while (orkdemo::NowMs() < dwait && listener->disconnections() == 0)
             orkdemo::SleepMs(20);
         CHECK(listener->disconnections() >= 1u, "host OnDisconnected 已触发");
-
-        framework->Stop();
-        hostStarted = false;
-        framework->RegisterListener(nullptr);
-        framework.reset();
-        listener.reset();
-        CHECK(true, "Stop + RegisterListener(nullptr) + 析构未 hang / 未崩");
     }
     catch (const std::exception& e)
     {

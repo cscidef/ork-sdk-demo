@@ -18,6 +18,11 @@
  *     会被自动 post 到 io 线程串行执行（Send 返回 Ok 只代表入队成功）。
  * 禁止在回调里析构 OrkClient 或调 Stop()（会 join 自己所在的线程 → 死锁）。
  *
+ * 本文件只回答「怎么 pump、怎么发、怎么打印」；双通道探针的节奏（先发
+ * Reliable、Unreliable 按 150ms 重试至多 8 次、上一轮回显到手才发下一轮）
+ * 由 demo_support.hpp 的 `RunDualChannelProbe` 给出，回显比对与 RTT 统计
+ * 由共享的 `EchoProbeListener` 给出 —— 与 test_cpp_roundtrip 同一份实现。
+ *
  * 用法
  * ----
  *   ./04_cpp_client                                   # 连 127.0.0.1:9400
@@ -31,12 +36,9 @@
 
 #include "ork/client/ork_client.hpp"
 
-#include <array>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
-#include <span>
 #include <string>
 
 namespace {
@@ -44,80 +46,59 @@ namespace {
 std::atomic<bool> g_stop{false};
 
 // ----------------------------------------------------------------------------
-// DemoListener —— IClientListener 的三个回调都有默认空实现，按需覆盖
+// 双通道探针的 Driver 适配（F2）
 // ----------------------------------------------------------------------------
-class DemoListener final : public ork::client::IClientListener
+struct ClientProbeDriver
 {
-public:
-    void OnConnected(uint32_t connectionId) override
+    ork::client::OrkClient&     client;
+    orkdemo::EchoProbeListener& listener;
+    ork::client::ClientState    lastState;
+
+    bool ShouldStop() const noexcept { return g_stop.load(std::memory_order_relaxed); }
+
+    // ★ 手动驱动：不调 PumpOnce，连接流程一步都不会推进。
+    // PumpOnce() 返回 void，出错走异常，所以恒 true。
+    bool Pump() { client.PumpOnce(); return true; }
+
+    void OnTick()
     {
-        connectionId_ = connectionId;
-        connected_.store(true, std::memory_order_relaxed);
-        std::printf("[client] OnConnected  connectionId=%u\n", connectionId);
+        const ork::client::ClientState st = client.GetState();
+        if (st == lastState) return;
+        std::printf("[client] state: %s -> %s\n",
+                    ork::client::ToString(lastState), ork::client::ToString(st));
         std::fflush(stdout);
+        lastState = st;
     }
 
-    void OnDisconnected(uint32_t reason) override
+    bool Connected()    const noexcept { return listener.connected(); }
+    bool Disconnected() const noexcept { return listener.disconnected(); }
+    bool ReliableEchoed()   const noexcept { return listener.reliableEcho(); }
+    bool UnreliableEchoed() const noexcept { return listener.unreliableEcho(); }
+    void ClearReliableEcho() noexcept { listener.clearReliableEcho(); }
+
+    // 每次发送前重盖时间戳：本 demo 的教学点之一就是 RTT，量到的必须是这一轮。
+    bool SendReliable(int round)
     {
-        disconnectReason_ = reason;
-        disconnected_.store(true, std::memory_order_relaxed);
-        std::printf("[client] OnDisconnected reason=%u\n", reason);
+        listener.RebuildReliableFrame();
+        const auto r = client.Send(listener.frameReliable(), TransportChannel::Reliable);
+        std::printf("[client] -> Reliable(KCP)   %zu B round=%d send=%s\n",
+                    listener.frameReliable().size(), round,
+                    std::string(ork::platform::ToString(r)).c_str());
         std::fflush(stdout);
+        return r == ork::client::SendResult::Ok;
     }
 
-    void OnPayload(std::span<const uint8_t> data, TransportChannel channel) override
+    // Unreliable 走裸 UDP，回显可能丢；重发几次是正常做法。
+    bool SendUnreliable(int attempt)
     {
-        payloads_++;
-        const bool reliable = (channel == TransportChannel::Reliable);
-        const std::span<const uint8_t> expect =
-            reliable ? std::span<const uint8_t>(frameReliable_)
-                     : std::span<const uint8_t>(frameUnreliable_);
-
-        if (data.size() != orkdemo::kEchoFrameSize || !orkdemo::IsEchoMagic(data))
-        {
-            std::printf("[client] OnPayload %s %zu B —— 非 ORKBENCH1 帧\n",
-                        reliable ? "Reliable" : "Unreliable", data.size());
-            std::fflush(stdout);
-            return;
-        }
-
-        if (std::memcmp(data.data(), expect.data(), expect.size()) == 0)
-        {
-            if (reliable) reliableEcho_ = true; else unreliableEcho_ = true;
-
-            const uint64_t sentNs =
-                orkdemo::GetU64Le(data.data() + orkdemo::kEchoMagic.size() + 8);
-            const long long rttUs =
-                static_cast<long long>((orkdemo::NowNs() - sentNs) / 1000ull);
-            std::printf("[client] OnPayload %s echo OK (%zu B, rtt~%lld us)\n",
-                        reliable ? "Reliable  " : "Unreliable", data.size(), rttUs);
-        }
-        else
-        {
-            std::printf("[client] OnPayload %s echo MISMATCH\n",
-                        reliable ? "Reliable" : "Unreliable");
-        }
+        listener.RebuildUnreliableFrame();
+        const auto r = client.Send(listener.frameUnreliable(), TransportChannel::Unreliable);
+        std::printf("[client] -> Unreliable(UDP) %zu B attempt=%d send=%s\n",
+                    listener.frameUnreliable().size(), attempt,
+                    std::string(ork::platform::ToString(r)).c_str());
         std::fflush(stdout);
+        return r == ork::client::SendResult::Ok;
     }
-
-    // ---- 主循环读写 ----
-    bool connected()    const noexcept { return connected_.load(std::memory_order_relaxed); }
-    bool disconnected() const noexcept { return disconnected_.load(std::memory_order_relaxed); }
-    uint32_t connectionId() const noexcept { return connectionId_; }
-    uint32_t disconnectReason() const noexcept { return disconnectReason_; }
-    uint64_t payloads() const noexcept { return payloads_; }
-
-    std::array<uint8_t, orkdemo::kEchoFrameSize> frameReliable_{};
-    std::array<uint8_t, orkdemo::kEchoFrameSize> frameUnreliable_{};
-    bool reliableEcho_   = false;
-    bool unreliableEcho_ = false;
-
-private:
-    std::atomic<bool> connected_{false};
-    std::atomic<bool> disconnected_{false};
-    uint32_t connectionId_    = 0;
-    uint32_t disconnectReason_ = 0;
-    uint64_t payloads_        = 0;
 };
 
 void Usage(const char* prog)
@@ -132,13 +113,31 @@ void Usage(const char* prog)
                 prog);
 }
 
+/**
+ * @brief strtol + 严格范围校验（F19：不用 atoi —— 它把 "abc" 静默当成 0）
+ * @param[out] rc  0 = 解析成功；2 = 非法（调用方应打印 Usage 后 return 2）
+ */
+int ParseIntArg(const char* what, const char* v, int lo, int hi, int* rc)
+{
+    char* end = nullptr;
+    const long n = std::strtol(v, &end, 10);
+    if (end == v || *end != '\0' || n < static_cast<long>(lo) || n > static_cast<long>(hi))
+    {
+        std::fprintf(stderr, "[client] %s 非法: \"%s\"（允许 %d..%d）\n", what, v, lo, hi);
+        *rc = 2;
+        return lo;
+    }
+    *rc = 0;
+    return static_cast<int>(n);
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
 {
     std::string host = "127.0.0.1";
-    uint16_t port = 9400;
-    int count = 1;
+    int port       = 9400;
+    int count      = 1;
     int timeoutSec = 10;
     bool encryption = true;
 
@@ -147,25 +146,34 @@ int main(int argc, char** argv)
         const std::string a = argv[i];
         if (a == "--help" || a == "-h") { Usage(argv[0]); return 0; }
         if (a == "--no-encryption") { encryption = false; continue; }
-        if (i + 1 >= argc) { std::fprintf(stderr, "[client] %s 缺少参数值\n", a.c_str()); return 2; }
-        const std::string v = argv[++i];
+        if (i + 1 >= argc)
+        {
+            std::fprintf(stderr, "[client] %s 缺少参数值\n", a.c_str());
+            Usage(argv[0]);
+            return 2;
+        }
+        const char* v = argv[++i];
+        int rc = 0;
         if      (a == "--host")    host = v;
-        else if (a == "--port")    port = static_cast<uint16_t>(std::atoi(v.c_str()));
-        else if (a == "--count")   count = std::atoi(v.c_str());
-        else if (a == "--timeout") timeoutSec = std::atoi(v.c_str());
-        else { std::fprintf(stderr, "[client] 未知参数 %s\n", a.c_str()); Usage(argv[0]); return 2; }
+        else if (a == "--port")    port = ParseIntArg("--port", v, 1, 65535, &rc);
+        else if (a == "--count")   count = ParseIntArg("--count", v, 1, 1000000, &rc);
+        else if (a == "--timeout") timeoutSec = ParseIntArg("--timeout", v, 1, 3600, &rc);
+        else
+        {
+            std::fprintf(stderr, "[client] 未知参数 %s\n", a.c_str());
+            Usage(argv[0]);
+            return 2;
+        }
+        if (rc != 0) { Usage(argv[0]); return rc; }
     }
-    if (count < 1) count = 1;
-    if (timeoutSec < 1) timeoutSec = 1;
 
     orkdemo::InitLogging("04_cpp_client");
 
-    std::printf("=============================================================\n");
+    orkdemo::PrintBannerRule();
     std::printf(" Demo 04 · C++ SDK client (OrkClient + IClientListener)\n");
-    std::printf(" target=%s:%u  encryption=%s  rounds=%d\n",
-                host.c_str(), static_cast<unsigned>(port),
-                encryption ? "on" : "off", count);
-    std::printf("=============================================================\n");
+    std::printf(" target=%s:%d  encryption=%s  rounds=%d\n",
+                host.c_str(), port, encryption ? "on" : "off", count);
+    orkdemo::PrintBannerRule();
 
     try
     {
@@ -173,109 +181,28 @@ int main(int argc, char** argv)
         // 因此声明顺序 = io 在前、client 在后，析构顺序自然相反。
         asio::io_context io;
 
-        const ork::client::ClientConfig cfg =
-            orkdemo::MakeClientConfig(host, port, encryption);
+        const ork::client::ClientConfig cfg = orkdemo::MakeClientConfig(
+            host, static_cast<uint16_t>(port), encryption);
 
         ork::client::OrkClient client(io, cfg);
-        DemoListener listener;
+        // verbose=true：demo 要逐帧打印回显与 RTT
+        orkdemo::EchoProbeListener listener(/*verbose=*/true);
 
         orkdemo::InstallSignalHandlers(g_stop);
 
         std::printf("[client] state=%s\n", ork::client::ToString(client.GetState()));
         client.Connect(&listener);
 
-        constexpr int kUdpMaxAttempts = 8;
-        constexpr int kUdpRetryMs     = 150;
+        ClientProbeDriver drv{client, listener, client.GetState()};
+        orkdemo::DualChannelProbeParams params;
+        params.reliableRounds = count;
+        params.timeoutMs      = timeoutSec * 1000;
+        params.pumpSleepMs    = 1;   // Client 靠调用方驱动，1ms 一拍足够灵敏
 
-        const double t0 = orkdemo::NowMs();
-        const double deadline = t0 + static_cast<double>(timeoutSec) * 1000.0;
-
-        int reliableRounds = 0;
-        bool firstReliableSent = false;
-        int udpAttempts = 0;
-        double nextUdpTry = 0.0;
-        auto lastState = client.GetState();
-
-        while (!g_stop.load(std::memory_order_relaxed))
-        {
-            // ★ 手动驱动：不调 PumpOnce，连接流程一步都不会推进。
-            client.PumpOnce();
-
-            const double t = orkdemo::NowMs();
-
-            const auto st = client.GetState();
-            if (st != lastState)
-            {
-                std::printf("[client] state: %s -> %s\n",
-                            ork::client::ToString(lastState),
-                            ork::client::ToString(st));
-                std::fflush(stdout);
-                lastState = st;
-            }
-
-            if (listener.connected())
-            {
-                // 第一轮 Reliable 探针：连接就绪后立刻发。
-                // （此刻 KCP 会话已建好——OrkClient 先 StartKcpSession()
-                //   再把状态置为 Connected 并回调 OnConnected。）
-                if (!firstReliableSent)
-                {
-                    orkdemo::BuildEchoFrame(listener.frameReliable_,
-                                            orkdemo::kMarkerReliable);
-                    const auto r = client.Send(listener.frameReliable_,
-                                               TransportChannel::Reliable);
-                    if (r == ork::client::SendResult::Ok) { firstReliableSent = true; reliableRounds = 1; }
-                    std::printf("[client] -> Reliable(KCP)   %zu B round=%d send=%s\n",
-                                listener.frameReliable_.size(), reliableRounds,
-                                std::string(ork::platform::ToString(r)).c_str());
-                    std::fflush(stdout);
-                }
-
-                // Unreliable 走裸 UDP，回显可能丢；重发几次是正常做法。
-                if (!listener.unreliableEcho_ && udpAttempts < kUdpMaxAttempts
-                    && t >= nextUdpTry)
-                {
-                    orkdemo::BuildEchoFrame(listener.frameUnreliable_,
-                                            orkdemo::kMarkerUnreliable);
-                    const auto r = client.Send(listener.frameUnreliable_,
-                                               TransportChannel::Unreliable);
-                    udpAttempts++;
-                    nextUdpTry = t + kUdpRetryMs;
-                    std::printf("[client] -> Unreliable(UDP) %zu B attempt=%d send=%s\n",
-                                listener.frameUnreliable_.size(), udpAttempts,
-                                std::string(ork::platform::ToString(r)).c_str());
-                    std::fflush(stdout);
-                }
-
-                // 后续 Reliable 轮次：上一轮回显到手才发下一轮（天然限流）。
-                if (listener.reliableEcho_ && reliableRounds < count)
-                {
-                    orkdemo::BuildEchoFrame(listener.frameReliable_,
-                                            orkdemo::kMarkerReliable);
-                    const auto r = client.Send(listener.frameReliable_,
-                                               TransportChannel::Reliable);
-                    if (r == ork::client::SendResult::Ok) reliableRounds++;
-                    listener.reliableEcho_ = false;   // 等这一轮的回显
-                    std::printf("[client] -> Reliable(KCP)   %zu B round=%d send=%s\n",
-                                listener.frameReliable_.size(), reliableRounds,
-                                std::string(ork::platform::ToString(r)).c_str());
-                    std::fflush(stdout);
-                }
-
-                // 收敛条件：最后一轮 Reliable 回显到手 + Unreliable 有结果
-                if (reliableRounds >= count && listener.reliableEcho_
-                    && (listener.unreliableEcho_ || udpAttempts >= kUdpMaxAttempts))
-                    break;
-            }
-
-            if (listener.disconnected()) break;
-            if (t >= deadline) { std::fprintf(stderr, "[client] 超时（%d s）\n", timeoutSec); break; }
-
-            orkdemo::SleepMs(1);
-        }
-
-        const bool reliableOk = (reliableRounds >= count) && listener.reliableEcho_;
-        const bool unreliableOk = listener.unreliableEcho_;
+        const orkdemo::DualChannelProbeResult probe =
+            orkdemo::RunDualChannelProbe(drv, params);
+        if (probe.timedOut)
+            std::fprintf(stderr, "[client] 超时（%d s）\n", timeoutSec);
 
         if (!listener.disconnected())
         {
@@ -295,14 +222,15 @@ int main(int argc, char** argv)
                     client.GetConnectionId(),
                     static_cast<unsigned long long>(listener.payloads()));
 
-        std::printf("-------------------------------------------------------------\n");
+        orkdemo::PrintSeparator();
         std::printf(" Reliable(KCP)   echo : %s (%d/%d rounds)\n",
-                    reliableOk ? "OK" : "FAIL", reliableRounds, count);
+                    probe.reliableOk ? "OK" : "FAIL", probe.reliableRounds, count);
         std::printf(" Unreliable(UDP) echo : %s (%d attempts)\n",
-                    unreliableOk ? "OK" : "FAIL", udpAttempts);
-        std::printf("-------------------------------------------------------------\n");
+                    probe.unreliableOk ? "OK" : "FAIL", probe.udpAttempts);
+        orkdemo::PrintSeparator();
 
-        const bool pass = listener.connected() && reliableOk && unreliableOk
+        // 看 g_stop 而不是 probe.stopped：Ctrl+C 也可能落在探针之后的收尾阶段
+        const bool pass = listener.connected() && probe.reliableOk && probe.unreliableOk
                           && !g_stop.load(std::memory_order_relaxed);
         std::printf("%s\n", pass ? "PASS: C++ SDK echo roundtrip"
                                  : "FAIL: C++ SDK echo roundtrip");

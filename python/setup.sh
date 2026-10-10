@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Ork Python Demo — 一键环境安装（macOS / Linux）
 #
-# 步骤: 创建 .venv → 安装依赖 → 编译 KCP bridge → 运行离线自检
+# 步骤: 创建 .venv → 安装依赖 → 编译 KCP bridge → 运行离线单元测试自检
 # 用法: cd python && bash setup.sh
 set -euo pipefail
 
@@ -44,64 +44,18 @@ else
     exit 1
 fi
 
-# 4. 离线自检：帧编解码向量 + 密码层 seal/open + KCP bridge 加载
+# 4. 离线自检：直接运行离线单元测试（帧编解码向量 + 密码层 seal/open）
 echo "[4/4] 运行离线自检..."
-python - <<'PY'
-import sys
+if .venv/bin/python -m pytest tests/test_frame_codec.py tests/test_cipher.py -q --tb=short 2>&1; then
+    echo "[OK] Offline tests passed"
+else
+    echo "[FAIL] Offline tests failed"
+    exit 1
+fi
 
-checks = []
-
-def check(name, fn):
-    try:
-        fn()
-        checks.append((name, "OK"))
-    except Exception as exc:  # noqa: BLE001
-        checks.append((name, f"FAIL ({exc})"))
-
-# PyNaCl（加密后端）
-def _nacl():
-    import nacl.bindings  # noqa: F401
-check("PyNaCl", _nacl)
-
-# pytest
-def _pytest():
-    import pytest  # noqa: F401
-check("pytest", _pytest)
-
-# ork_frame 向量组 A/B 自检（Bootstrap V2 109B + Handshake V2 42B）
-def _frame():
-    import lib.ork_frame as f
-    f._self_test()
-check("ork_frame self-test", _frame)
-
-# ork_cipher seal/open 往返自检
-def _cipher():
-    import lib.ork_cipher as c
-    c._smoke_test()
-check("ork_cipher smoke-test", _cipher)
-
-# KCP bridge（实际 ctypes 加载验证）
-def _kcp():
-    from lib.kcp.ikcp_binding import RudpSession  # noqa: F401
-check("KCP bridge", _kcp)
-
-# 会话模块可导入（依赖 KCP bridge）
-def _session():
-    from lib.ork_client_session import OrkClientSession  # noqa: F401
-check("OrkClientSession import", _session)
-
-print()
-for name, status in checks:
-    symbol = "✓" if status == "OK" else "✗"
-    print(f"  {symbol} {name}: {status}")
-
-failed = [c for c in checks if c[1] != "OK"]
-if failed:
-    print(f"\n错误: {len(failed)} 项自检未通过", file=sys.stderr)
-    sys.exit(1)
-print("\n=== 环境准备完成 ===")
-print("激活环境:  source .venv/bin/activate")
-print("启动服务端: bash ../server/start.sh   (默认端口 9400)")
-print("运行演示:  python demos/01_echo/client.py")
-print("运行测试:  pytest tests/ -v")
-PY
+echo ""
+echo "=== 环境准备完成 ==="
+echo "激活环境:  source .venv/bin/activate"
+echo "启动服务端: bash ../server/start.sh   (默认端口 9400)"
+echo "运行演示:  python demos/01_echo/client.py"
+echo "运行测试:  pytest tests/ -v"

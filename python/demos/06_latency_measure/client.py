@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -45,33 +44,12 @@ from lib.demo_helpers import (  # noqa: E402
     marker_int,
     ok,
     rule,
+    run_channel,
     summarize_rtt,
-    wait_echo,
 )
 from lib.ork_client_session import OrkClientSession  # noqa: E402
 
 PING_TIMEOUT = 2.0
-
-
-def measure_channel(session: OrkClientSession, *, reliable: bool, base_seq: int, pings: int, warmup: int) -> tuple[list[float], int]:
-    """对单通道发 pings 次 ping；返回 (RTT 样本 ms, 送达数)。前 warmup 次不计入样本。"""
-    rtts: list[float] = []
-    delivered = 0
-    for i in range(pings):
-        seq = base_seq + i
-        ts = time.perf_counter_ns()
-        if reliable:
-            session.send_bench_reliable(seq, ts)
-            hit = wait_echo(session, reliable=True, want_seq=seq, sent_ts={ts}, timeout=PING_TIMEOUT)
-        else:
-            session.send_bench_unreliable(seq, ts)
-            hit = wait_echo(session, reliable=False, want_seq=seq, sent_ts={ts}, timeout=PING_TIMEOUT)
-        if hit is None:
-            continue
-        delivered += 1
-        if i >= warmup:
-            rtts.append((time.perf_counter_ns() - hit) / 1e6)
-    return rtts, delivered
 
 
 def main() -> int:
@@ -96,16 +74,20 @@ def main() -> int:
         session = connect_verbose(args.host, args.port, "demo-06-latency")
 
         rule(f"Reliable (KCP) · {args.pings} pings")
-        rel_rtts, rel_deliv = measure_channel(
-            session, reliable=True, base_seq=(marker_int(RELIABLE_MARKER) & 0xFFFF_FFFF) + 3_000_000, pings=args.pings, warmup=warmup
+        rel = run_channel(
+            session, reliable=True,
+            base_seq=(marker_int(RELIABLE_MARKER) & 0xFFFF_FFFF) + 3_000_000,
+            iterations=args.pings, warmup=warmup, per_iter_timeout=PING_TIMEOUT,
         )
-        info(f"送达 {rel_deliv}/{args.pings} · 有效样本 {len(rel_rtts)}")
+        info(f"送达 {rel.delivered}/{args.pings} · 有效样本 {len(rel.rtts)}")
 
         rule(f"Unreliable (UDP) · {args.pings} pings")
-        udp_rtts, udp_deliv = measure_channel(
-            session, reliable=False, base_seq=(marker_int(UNRELIABLE_MARKER) & 0xFFFF_FFFF) + 4_000_000, pings=args.pings, warmup=warmup
+        udp = run_channel(
+            session, reliable=False,
+            base_seq=(marker_int(UNRELIABLE_MARKER) & 0xFFFF_FFFF) + 4_000_000,
+            iterations=args.pings, warmup=warmup, per_iter_timeout=PING_TIMEOUT,
         )
-        info(f"送达 {udp_deliv}/{args.pings} · 有效样本 {len(udp_rtts)}")
+        info(f"送达 {udp.delivered}/{args.pings} · 有效样本 {len(udp.rtts)}")
     except Exception as exc:  # noqa: BLE001
         fail(f"连接/测量失败: {exc}")
         return 1
@@ -115,13 +97,13 @@ def main() -> int:
 
     rule("RTT 统计 (ms)")
     print(format_rtt_table({
-        "Reliable(KCP)": summarize_rtt(rel_rtts),
-        "Unreliable(UDP)": summarize_rtt(udp_rtts),
+        "Reliable(KCP)": summarize_rtt(rel.rtts),
+        "Unreliable(UDP)": summarize_rtt(udp.rtts),
     }))
     print()
-    print(f"  送达率:  Reliable {100.0 * rel_deliv / args.pings:.2f}%   ·   Unreliable {100.0 * udp_deliv / args.pings:.2f}%")
+    print(f"  送达率:  Reliable {100.0 * rel.delivered / args.pings:.2f}%   ·   Unreliable {100.0 * udp.delivered / args.pings:.2f}%")
 
-    if not rel_rtts and not udp_rtts:
+    if not rel.rtts and not udp.rtts:
         fail("两通道均无有效 RTT 样本")
         return 1
     ok("RTT 测量完成")

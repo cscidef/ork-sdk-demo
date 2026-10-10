@@ -35,6 +35,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from lib.demo_helpers import (  # noqa: E402
+    PER_ITER_TIMEOUT,
     RELIABLE_MARKER,
     UNRELIABLE_MARKER,
     add_common_args,
@@ -46,30 +47,10 @@ from lib.demo_helpers import (  # noqa: E402
     marker_int,
     ok,
     rule,
+    run_channel,
     summarize_rtt,
-    wait_echo,
 )
 from lib.ork_client_session import OrkClientSession  # noqa: E402
-
-PER_ITER_TIMEOUT = 1.0  # 单次发送的回显等待窗口（秒），超时计为丢失
-
-
-def run_channel(session: OrkClientSession, *, reliable: bool, base_seq: int, iterations: int) -> tuple[int, list[float]]:
-    """在指定通道单发单收 iterations 次；返回 (送达数, RTT 采样列表 ms)。"""
-    delivered = 0
-    rtts: list[float] = []
-    for i in range(iterations):
-        seq = base_seq + i
-        ts = time.perf_counter_ns()
-        if reliable:
-            session.send_bench_reliable(seq, ts)
-        else:
-            session.send_bench_unreliable(seq, ts)
-        hit = wait_echo(session, reliable=reliable, want_seq=seq, sent_ts={ts}, timeout=PER_ITER_TIMEOUT)
-        if hit is not None:
-            delivered += 1
-            rtts.append((time.perf_counter_ns() - hit) / 1e6)
-    return delivered, rtts
 
 
 def main() -> int:
@@ -95,16 +76,22 @@ def main() -> int:
         rule(f"Reliable (KCP) · {n} 次")
         rel_base = marker_int(RELIABLE_MARKER) & 0xFFFF_FFFF  # 用低位区间避免与 UDP 段重叠
         t0 = time.perf_counter()
-        rel_delivered, rel_rtts = run_channel(session, reliable=True, base_seq=rel_base + 1_000_000, iterations=n)
+        rel = run_channel(
+            session, reliable=True, base_seq=rel_base + 1_000_000,
+            iterations=n, per_iter_timeout=PER_ITER_TIMEOUT,
+        )
         rel_wall = time.perf_counter() - t0
-        info(f"送达 {rel_delivered}/{n}  用时 {rel_wall:.2f}s")
+        info(f"送达 {rel.delivered}/{n}  用时 {rel_wall:.2f}s")
 
         rule(f"Unreliable (UDP) · {n} 次")
         udp_base = marker_int(UNRELIABLE_MARKER) & 0xFFFF_FFFF
         t0 = time.perf_counter()
-        udp_delivered, udp_rtts = run_channel(session, reliable=False, base_seq=udp_base + 2_000_000, iterations=n)
+        udp = run_channel(
+            session, reliable=False, base_seq=udp_base + 2_000_000,
+            iterations=n, per_iter_timeout=PER_ITER_TIMEOUT,
+        )
         udp_wall = time.perf_counter() - t0
-        info(f"送达 {udp_delivered}/{n}  用时 {udp_wall:.2f}s")
+        info(f"送达 {udp.delivered}/{n}  用时 {udp_wall:.2f}s")
     except Exception as exc:  # noqa: BLE001
         fail(f"连接/收发失败: {exc}")
         return 1
@@ -113,19 +100,19 @@ def main() -> int:
             session.close()
 
     rule("对比结果")
-    rel_rate = 100.0 * rel_delivered / n
-    udp_rate = 100.0 * udp_delivered / n
+    rel_rate = 100.0 * rel.delivered / n
+    udp_rate = 100.0 * udp.delivered / n
     print(f"  通道              送达率        送达数")
     print(f"  ───────────────  ──────────   ─────────")
-    print(f"  Reliable (KCP)    {rel_rate:6.2f}%     {rel_delivered}/{n}")
-    print(f"  Unreliable (UDP)  {udp_rate:6.2f}%     {udp_delivered}/{n}")
+    print(f"  Reliable (KCP)    {rel_rate:6.2f}%     {rel.delivered}/{n}")
+    print(f"  Unreliable (UDP)  {udp_rate:6.2f}%     {udp.delivered}/{n}")
     print()
     print(format_rtt_table({
-        "Reliable(KCP)": summarize_rtt(rel_rtts),
-        "Unreliable(UDP)": summarize_rtt(udp_rtts),
+        "Reliable(KCP)": summarize_rtt(rel.rtts),
+        "Unreliable(UDP)": summarize_rtt(udp.rtts),
     }))
 
-    if rel_delivered == 0 and udp_delivered == 0:
+    if rel.delivered == 0 and udp.delivered == 0:
         fail("两通道均 0 送达，demo 失败")
         return 1
     ok(f"对比完成：KCP 送达率 {rel_rate:.2f}% / UDP 送达率 {udp_rate:.2f}%")

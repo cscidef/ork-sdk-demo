@@ -18,133 +18,20 @@
  * 退出码：0 = 全部断言通过；1 = 有断言失败。
  */
 
-#include "ork/sdk/c/ork_abi.h"
+/* demo_support_c.h 提供 ork_abi.h、平台差异宏、ork_demo_pick_free_port()
+ * （TCP bootstrap 与 UDP/KCP 共用同一端口，两边都探）与配置填充。 */
+#include "demo_support_c.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(_WIN32)
-#  include <winsock2.h>
-#  include <ws2tcpip.h>
-#  define ORK_CLOSESOCK closesocket
-#  define ORK_DEVNULL "NUL"
-typedef SOCKET ork_sock_t;
-#  define ORK_SOCK_INVALID INVALID_SOCKET
-#else
-#  include <arpa/inet.h>
-#  include <netinet/in.h>
-#  include <sys/socket.h>
-#  include <unistd.h>
-#  define ORK_CLOSESOCK close
-#  define ORK_DEVNULL "/dev/null"
-typedef int ork_sock_t;
-#  define ORK_SOCK_INVALID (-1)
-#endif
-
 /* -------------------------------------------------------------------------- */
-/* 极简断言框架（不依赖任何第三方）                                            */
+/* 极简断言框架（共享）：失败时顺带打出 Host 侧的错误串                         */
 /* -------------------------------------------------------------------------- */
-static int g_checks   = 0;
-static int g_failures = 0;
-
-static void check(int cond, const char* label, int line)
-{
-    ++g_checks;
-    if (cond)
-    {
-        printf("  [ok]   %s\n", label);
-    }
-    else
-    {
-        ++g_failures;
-        printf("  [FAIL] %s   (line %d)\n", label, line);
-        printf("         ork_last_error() = \"%s\"\n", ork_last_error());
-    }
-    fflush(stdout);
-}
-
-#define CHECK(cond, label) check((cond), (label), __LINE__)
-
-static void check_u32(unsigned long long actual, unsigned long long expected,
-                      const char* label, int line)
-{
-    ++g_checks;
-    if (actual == expected)
-    {
-        printf("  [ok]   %s (= %llu)\n", label, actual);
-    }
-    else
-    {
-        ++g_failures;
-        printf("  [FAIL] %s: got %llu, expected %llu   (line %d)\n",
-               label, actual, expected, line);
-        printf("         ork_last_error() = \"%s\"\n", ork_last_error());
-    }
-    fflush(stdout);
-}
-
-#define CHECK_EQ(actual, expected, label) \
-    check_u32((unsigned long long)(actual), (unsigned long long)(expected), (label), __LINE__)
-
-/* -------------------------------------------------------------------------- */
-/* 临时端口：TCP bootstrap 与 UDP/KCP 共用同一端口，必须两边都探                */
-/* -------------------------------------------------------------------------- */
-static uint16_t pick_free_port(void)
-{
-    int attempt;
-#if defined(_WIN32)
-    WSADATA wsa;
-    WSAStartup(MAKEWORD(2, 2), &wsa);
-#endif
-
-    for (attempt = 0; attempt < 64; ++attempt)
-    {
-        struct sockaddr_in addr;
-        socklen_t len = (socklen_t)sizeof(addr);
-        uint16_t port;
-        ork_sock_t udp, tcp;
-
-        memset(&addr, 0, sizeof(addr));
-        addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        addr.sin_port = 0;
-
-        udp = socket(AF_INET, SOCK_DGRAM, 0);
-        if (udp == ORK_SOCK_INVALID) continue;
-        if (bind(udp, (struct sockaddr*)&addr, sizeof(addr)) != 0)
-        {
-            ORK_CLOSESOCK(udp);
-            continue;
-        }
-        if (getsockname(udp, (struct sockaddr*)&addr, &len) != 0)
-        {
-            ORK_CLOSESOCK(udp);
-            continue;
-        }
-        port = (uint16_t)ntohs(addr.sin_port);
-
-        /* 同一端口再探 TCP */
-        tcp = socket(AF_INET, SOCK_STREAM, 0);
-        if (tcp == ORK_SOCK_INVALID)
-        {
-            ORK_CLOSESOCK(udp);
-            continue;
-        }
-        addr.sin_port = htons(port);
-        if (bind(tcp, (struct sockaddr*)&addr, sizeof(addr)) != 0)
-        {
-            ORK_CLOSESOCK(udp);
-            ORK_CLOSESOCK(tcp);
-            continue;
-        }
-
-        ORK_CLOSESOCK(udp);
-        ORK_CLOSESOCK(tcp);
-        return port;   /* 两个 socket 关闭后端口被释放（存在极小竞态窗口） */
-    }
-    return 0;
-}
+#define ORK_TEST_PRINT_LAST_ERROR() \
+    printf("         ork_last_error() = \"%s\"\n", ork_last_error())
+#include "ork_test_assert.h"
 
 /* -------------------------------------------------------------------------- */
 /* 回调：本测试不建连接，理论上不会被触发；一旦被触发就记录下来当失败信号       */
@@ -176,22 +63,18 @@ static void cb_stats(void* user, const OrkStats* stats)
     ++g_cb_stats;
 }
 
+/**
+ * @brief 一份「所有不变式都满足」的 Host 配置
+ *
+ * 字段默认值与不变式（tcp_port == udp_port、drive_mode == 0、
+ * kcp_update_rate_hz >= pump_rate_hz …）由 ork_demo_fill_host_config 统一保证，
+ * 这里只覆盖测试专属的两项：日志静音。
+ */
 static void fill_valid_config(OrkHostConfig* c, uint16_t port)
 {
-    memset(c, 0, sizeof(*c));
-    c->struct_size         = (uint32_t)sizeof(OrkHostConfig);
-    c->tcp_port            = port;
-    c->udp_port            = port;      /* 与 tcp_port 相同 */
-    c->enable_kcp          = 1;
-    c->enable_encryption   = 1;
-    c->bootstrap_ttl_sec   = 300;
-    c->pump_rate_hz        = 30;
-    c->kcp_update_rate_hz  = 100;       /* 必须 >= pump_rate_hz */
-    c->idle_timeout_sec    = 300;
-    c->max_packet_size     = 1200;
-    c->drive_mode          = 0;         /* 1 = External，当前实现显式拒绝 */
-    c->log_path            = ORK_DEVNULL;
-    c->log_level           = (uint32_t)OrkLog_Off;   /* 测试保持静音 */
+    ork_demo_fill_host_config(c, port, /*enable_encryption=*/1);
+    c->log_path  = ORK_DEVNULL;
+    c->log_level = (uint32_t)OrkLog_Off;   /* 测试保持静音 */
 }
 
 /* ========================================================================== */
@@ -203,13 +86,13 @@ int main(void)
     uint16_t port;
     OrkError e;
 
-    printf("=============================================================\n");
+    printf(ORK_BANNER_RULE "\n");
     printf(" test_c_abi_host · C ABI Host smoke\n");
     printf(" sizeof(OrkHostConfig)=%zu sizeof(OrkHostCallbacks)=%zu\n",
            sizeof(OrkHostConfig), sizeof(OrkHostCallbacks));
     printf(" sizeof(OrkConnectionInfo)=%zu sizeof(OrkStats)=%zu\n",
            sizeof(OrkConnectionInfo), sizeof(OrkStats));
-    printf("=============================================================\n");
+    printf(ORK_BANNER_RULE "\n");
 
     /* ---- 1. ABI 版本 --------------------------------------------------- */
     printf("\n[1] ABI 版本\n");
@@ -245,9 +128,9 @@ int main(void)
 
     /* ---- 3. create 参数校验 -------------------------------------------- */
     printf("\n[3] ork_host_create 参数校验\n");
-    port = pick_free_port();
-    CHECK(port != 0, "pick_free_port() 拿到临时端口");
-    if (port == 0) { printf("\nFAIL (%d/%d)\n", g_failures, g_checks); return 1; }
+    port = ork_demo_pick_free_port();
+    CHECK(port != 0, "ork_demo_pick_free_port() 拿到临时端口");
+    if (port == 0) ORK_TEST_ABORT();
     printf("      loopback 端口 = %u\n", (unsigned)port);
 
     memset(&cb, 0, sizeof(cb));
@@ -306,7 +189,7 @@ int main(void)
     e = ork_host_create(&cfg, &cb, &host);
     CHECK_EQ(e, OrkOk, "create(valid) -> OrkOk");
     CHECK(host != NULL, "out_host 非 NULL");
-    if (host == NULL) { printf("\nFAIL (%d/%d)\n", g_failures, g_checks); return 1; }
+    if (host == NULL) ORK_TEST_ABORT();
 
     /* ---- 5. start 之前的运行期 API 一律拒绝 ------------------------------ */
     printf("\n[5] 未 start 时的运行期 API\n");
@@ -371,12 +254,10 @@ int main(void)
          *   于是保守映射为 SendResult::BadState（见 sender.cpp 头部注释）。
          *   所以 C ABI 的 OrkSend_NotConnected 实际上只会从 ork_client_send
          *   （客户端未 Connected）产生，host 侧永远走不到。 */
-        {
-            const OrkSendResult sr = ork_host_send(host, 1, blob, 8, OrkChannel_Unreliable);
-            CHECK_EQ(sr, OrkSend_BadState,
-                   "send(不存在的连接) -> BadState（TrySend=false 的保守映射）");
-            CHECK(sr != OrkSend_Ok, "send(不存在的连接) 绝不可返回 Ok");
-        }
+        /* BadState != Ok，所以下面这一条已经蕴含了「绝不可返回 Ok」，
+         * 不需要再补一条弱化版断言。 */
+        CHECK_EQ(ork_host_send(host, 1, blob, 8, OrkChannel_Unreliable), OrkSend_BadState,
+               "send(不存在的连接) -> BadState（TrySend=false 的保守映射）");
     }
     {
         OrkStats st;
@@ -384,9 +265,7 @@ int main(void)
         st.struct_size = (uint32_t)sizeof(OrkStats);
         CHECK_EQ(ork_host_get_stats(host, &st), OrkOk, "get_stats(已 start) -> OrkOk");
         CHECK_EQ(st.active_connections, 0u, "stats.active_connections == 0");
-        CHECK(st.crypto_fail_aead == 0 && st.crypto_fail_replay == 0
-              && st.crypto_fail_expired == 0 && st.crypto_fail_malformed == 0,
-              "stats.crypto_fail_* 全 0");
+        CHECK(ork_demo_crypto_fail_total(&st) == 0, "stats.crypto_fail_* 全 0");
         /* disconnects_by_reason 必须是 8 槽且全 0 */
         {
             int i, all_zero = 1;
@@ -413,14 +292,5 @@ int main(void)
     CHECK_EQ(g_cb_payload,      0u, "on_payload 未触发");
 
     /* ---- 汇总 ----------------------------------------------------------- */
-    printf("\n=============================================================\n");
-    if (g_failures == 0)
-    {
-        printf("PASS: test_c_abi_host  (%d/%d checks)\n", g_checks - g_failures, g_checks);
-        printf("=============================================================\n");
-        return 0;
-    }
-    printf("FAIL: test_c_abi_host  (%d failures / %d checks)\n", g_failures, g_checks);
-    printf("=============================================================\n");
-    return 1;
+    ORK_TEST_SUMMARY("test_c_abi_host");
 }

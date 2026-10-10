@@ -1,4 +1,4 @@
-"""pytest 共享 fixture：自动启停 demo 服务端 + 路径 / host / port 注入。
+"""pytest 共享 fixture：自动启停 demo 服务端 + 路径 / host / port / session 注入。
 
 设计
 ----
@@ -9,8 +9,10 @@
       **不** 关停它（谁启动谁负责）；
     · 否则调用 `server/start.sh`（GAME_PORT 环境变量指定端口）启动，轮询等待端口
       LISTEN + 一次 TCP 探测连通，yield，结束后 `server/stop.sh` 关停。
-- **离线 vs 在线**：`test_frame_codec.py` / `test_cipher.py` 不请求 `server`，纯离线；
-  其余在线测试通过 `server` fixture 触发自动启停。
+- **共享 `session` fixture**：在线测试统一用它拿到一条已连接的 OrkClientSession，
+  测试结束自动 close；不再在各测试文件里重复定义局部 fixture。
+- **离线 vs 在线**：`test_frame_codec.py` / `test_cipher.py` 不请求 `server`/`session`，
+  纯离线；其余在线测试通过 `session`（→ `server`）fixture 触发自动启停。
 
 环境变量
 --------
@@ -74,11 +76,6 @@ def port() -> int:
 
 
 @pytest.fixture(scope="session")
-def python_dir() -> Path:
-    return PYTHON_DIR
-
-
-@pytest.fixture(scope="session")
 def testdata_dir() -> Path:
     d = PYTHON_DIR / "testdata"
     assert d.is_dir(), f"testdata 目录缺失: {d}（先运行 python testdata/generate.py）"
@@ -120,3 +117,19 @@ def server():
     finally:
         subprocess.run(["bash", str(stop_sh)], cwd=str(SERVER_DIR),
                        capture_output=True, text=True, timeout=30)
+
+
+@pytest.fixture
+def session(server, host, port):
+    """在线测试共享的已连接 OrkClientSession（测试结束自动 close）。
+
+    connect_verbose 惰性导入：离线测试（test_frame_codec / test_cipher）不请求
+    本 fixture，因此不会触发 KCP bridge 的 ctypes 加载。
+    """
+    from lib.demo_helpers import connect_verbose
+
+    s = connect_verbose(host, port, "pytest", quiet=True)
+    try:
+        yield s
+    finally:
+        s.close()

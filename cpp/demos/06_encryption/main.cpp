@@ -37,12 +37,13 @@
  * --------------------------------
  * Ork 的 C ABI 本身是纯 C11 的（demo 01 / 02 就是 main.c）。本 demo 用 .cpp
  * 只是为了复用 demos/common/demo_support.hpp 里的 PickFreePort()（需要 asio
- * 才能跨平台地同时探测 TCP + UDP 空闲端口）与时间小工具 —— **所有 Ork API
- * 调用都是 C ABI**，没有一个 C++ SDK 类型。
+ * 才能跨平台地同时探测 TCP + UDP 空闲端口）、双通道探针循环
+ * RunDualChannelProbe() 与时间小工具 —— **所有 Ork API 调用都是 C ABI**，
+ * 没有一个 C++ SDK 类型。
  *
  * 注意 C++ 里不能用 `ORK_HOST_CONFIG_INIT` 这类 C99 复合字面量宏
  * （`CMAKE_CXX_EXTENSIONS OFF` 下非法），改成 `OrkHostConfig c{};`
- * + 手工填 `struct_size`。
+ * + 调 demo_support_c.h 的 `ork_demo_fill_host_config()` 填字段。
  *
  * 用法
  * ----
@@ -54,7 +55,7 @@
  * 退出码：0 = 两轮均符合预期；1 = 失败 / 超时；2 = 参数错误。
  */
 
-#include "demo_support.hpp"          // 仅用 PickFreePort / NowMs / SleepMs / EnvOr / BuildEchoFrame
+#include "demo_support.hpp"          // PickFreePort / NowMs / SleepMs / BuildEchoFrame / RunDualChannelProbe
 
 #include "ork/sdk/c/ork_abi.h"       // ← C ABI Host（13 个函数）
 #include "ork/sdk/c/ork_client_abi.h"// ← C ABI Client（9 个函数）
@@ -65,6 +66,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <string_view>
 
 namespace {
 
@@ -106,62 +108,16 @@ struct ClientCtx
 
 // ---------------------------------------------------------------------------
 // 小工具
+//
+// 枚举名映射（SendResultName / ClientStateName / LinkName）、日志级别解析
+// （EnvLogLevel）与 crypto_fail_* 求和（CryptoFailTotal）都来自共享头，
+// 本文件不再各留一份（F1 / F9）。
 // ---------------------------------------------------------------------------
+/** @brief 取 25B 帧的 marker（8 字节，不保证 NUL 结尾） */
 std::string_view FrameMarker(const uint8_t* data, uint32_t size) noexcept
 {
-    if (size < orkdemo::kEchoMagic.size() + 8) return {};
-    return {reinterpret_cast<const char*>(data) + orkdemo::kEchoMagic.size(), 8};
-}
-
-const char* SendResultName(OrkSendResult r) noexcept
-{
-    switch (r)
-    {
-    case OrkSend_Ok:           return "Ok";
-    case OrkSend_TooLarge:     return "TooLarge";
-    case OrkSend_NotConnected: return "NotConnected";
-    case OrkSend_BadState:     return "BadState";
-    case OrkSend_QueueFull:    return "QueueFull";
-    }
-    return "Unknown";
-}
-
-const char* ClientStateName(OrkClientState s) noexcept
-{
-    switch (s)
-    {
-    case OrkClientState_Disconnected:  return "Disconnected";
-    case OrkClientState_Connecting:    return "Connecting";
-    case OrkClientState_Bootstrapping: return "Bootstrapping";
-    case OrkClientState_Handshaking:   return "Handshaking";
-    case OrkClientState_Connected:     return "Connected";
-    case OrkClientState_Disconnecting: return "Disconnecting";
-    }
-    return "Unknown";
-}
-
-const char* LinkName(uint32_t link) noexcept
-{
-    switch (static_cast<OrkLinkType>(link))
-    {
-    case OrkLink_Tcp: return "TCP";
-    case OrkLink_Udp: return "UDP";
-    case OrkLink_Kcp: return "KCP";
-    }
-    return "?";
-}
-
-/** @brief 把 ORK_LOG_LEVEL 映射成 OrkLogLevel（C ABI 的 log_level 字段） */
-uint32_t EnvLogLevel() noexcept
-{
-    const std::string v = orkdemo::EnvOr("ORK_LOG_LEVEL", "warn");
-    if (v == "trace") return static_cast<uint32_t>(OrkLog_Trace);
-    if (v == "debug") return static_cast<uint32_t>(OrkLog_Debug);
-    if (v == "info")  return static_cast<uint32_t>(OrkLog_Info);
-    if (v == "warn")  return static_cast<uint32_t>(OrkLog_Warn);
-    if (v == "error") return static_cast<uint32_t>(OrkLog_Error);
-    if (v == "off")   return static_cast<uint32_t>(OrkLog_Off);
-    return static_cast<uint32_t>(OrkLog_Warn);
+    const char* m = ork_demo_frame_marker(data, size);
+    return (m != nullptr) ? std::string_view(m, ORK_MARKER_LEN) : std::string_view{};
 }
 
 // ---------------------------------------------------------------------------
@@ -185,7 +141,7 @@ void HostOnConnected(void* user, uint32_t connectionId)
         ctx->encryptionActive.store(info.encryption_active ? 1 : 0);
         ctx->linkType.store(static_cast<int>(info.link));
         std::printf("[host] + connection %u  link=%s  encryption_active=%d  <<< bootstrap 协商结果\n",
-                    connectionId, LinkName(info.link),
+                    connectionId, orkdemo::LinkName(info.link),
                     static_cast<int>(info.encryption_active));
     }
     else
@@ -215,7 +171,7 @@ void HostOnPayload(void* user, uint32_t connectionId,
     if (r != OrkSend_Ok)
     {
         ctx->sendFailures.fetch_add(1);
-        std::printf("[host] ! echo to %u failed: %s\n", connectionId, SendResultName(r));
+        std::printf("[host] ! echo to %u failed: %s\n", connectionId, orkdemo::SendResultName(r));
         std::fflush(stdout);
         return;
     }
@@ -238,8 +194,7 @@ void HostOnStats(void* user, const OrkStats* stats)
     if (stats == nullptr) return;
     auto* ctx = static_cast<HostCtx*>(user);
     // 加密失败四计数器：任何一项非 0 都说明 AEAD 协商/密钥出了问题
-    ctx->cryptoFails.store(stats->crypto_fail_aead + stats->crypto_fail_replay
-                           + stats->crypto_fail_expired + stats->crypto_fail_malformed);
+    ctx->cryptoFails.store(orkdemo::CryptoFailTotal(*stats));   // F9
     ctx->bytesIn.store(static_cast<unsigned long long>(stats->bytes_in));
     ctx->bytesOut.store(static_cast<unsigned long long>(stats->bytes_out));
 }
@@ -308,45 +263,53 @@ struct RoundResult
     std::string error;
 };
 
-RoundResult RunRound(const char* label, bool encryption, int timeoutSec)
+// ---------------------------------------------------------------------------
+// 拆除（NULL 安全；错误路径与正常路径共用）
+// ---------------------------------------------------------------------------
+/** @brief 拆 host：stop + destroy。未 start 就 stop 只会得到 NotStarted，无害。 */
+void DestroyHost(OrkHost host)
 {
-    RoundResult res;
+    if (host == nullptr) return;
+    ork_host_stop(host);          // 不得在网络 pump 线程内调用（这里在主线程，OK）
+    ork_host_destroy(host);
+}
 
-    std::printf("\n=============================================================\n");
-    std::printf(" %s · enable_encryption = %d\n", label, encryption ? 1 : 0);
-    std::printf("=============================================================\n");
-    std::fflush(stdout);
-
-    // ---- 0. 端口：TCP bootstrap 与 UDP/KCP 共用，必须两边都空闲 -----------
-    const uint16_t port = orkdemo::PickFreePort();
-    if (port == 0)
+/** @brief 拆 client：disconnect + 把异步收尾 pump 干净 + destroy */
+void DestroyClient(OrkClientHandle client, ClientCtx& cctx)
+{
+    if (client == nullptr) return;
+    ork_client_disconnect(client);
+    const double drainUntil = orkdemo::NowMs() + 2000.0;
+    while (orkdemo::NowMs() < drainUntil && !cctx.disconnected.load())
     {
-        res.error = "PickFreePort 失败";
-        std::fprintf(stderr, "[round] %s\n", res.error.c_str());
-        return res;
+        ork_client_pump_once(client);
+        orkdemo::SleepMs(10);
     }
-    std::printf("[round] loopback 端口 = %u (TCP + UDP 共用)\n", static_cast<unsigned>(port));
+    ork_client_destroy(client);
+}
 
-    // ---- 1. Host ---------------------------------------------------------
-    HostCtx hctx;
-    OrkHost host = nullptr;
+// ===========================================================================
+// F25：RunRound 原本是一个 244 行的巨函数，按既有的 `// ---- N. xxx ----`
+// 小节边界拆成 5 个各司其职的函数，RunRound 只剩「编排 + 判定」。
+// ===========================================================================
 
+// ---- 1. Host --------------------------------------------------------------
+/**
+ * @brief 建 host 并 Start
+ * @param[out] outHost  成功时写入句柄；失败时保持 nullptr
+ * @return false 表示已把错误写进 res.error 并完成必要清理
+ */
+bool CreateHost(uint16_t port, bool encryption, HostCtx& hctx,
+                OrkHost& outHost, RoundResult& res)
+{
+    // 默认值与全部不变式（tcp_port == udp_port、drive_mode == 0、
+    // kcp_update_rate_hz >= pump_rate_hz、max_packet_size ∈ [50,1414] …）
+    // 由 demo_support_c.h 的 ork_demo_fill_host_config 统一给出（F8），
+    // 这里只覆盖两个跟环境变量走的日志字段。
     OrkHostConfig hcfg{};                       // C++ 里不能用 ORK_HOST_CONFIG_INIT
-    hcfg.struct_size            = sizeof(OrkHostConfig);
-    hcfg.tcp_port               = port;
-    hcfg.udp_port               = port;         // ★ 与 tcp_port 相同
-    hcfg.enable_kcp             = 1;
-    hcfg.enable_encryption      = encryption ? 1 : 0;   // ← 权威开关
-    hcfg.bootstrap_ttl_sec      = 300;          // AEAD 密钥有效期
-    hcfg.pump_rate_hz           = 30;
-    hcfg.kcp_update_rate_hz     = 100;          // 必须 >= pump_rate_hz
-    hcfg.idle_timeout_sec       = 300;
-    hcfg.max_packet_size        = 1200;
-    hcfg.outbound_queue_capacity= 0;            // 0 = 默认
-    hcfg.inbound_queue_capacity = 0;
-    hcfg.drive_mode             = 0;            // 0 = 内部 pump 线程（1 会被 create 拒绝）
-    hcfg.log_path               = orkdemo::EnvOr("ORK_LOG_FILE", orkdemo::kDevNull);
-    hcfg.log_level              = EnvLogLevel();
+    ork_demo_fill_host_config(&hcfg, port, encryption ? 1 : 0);
+    hcfg.log_path  = ork_demo_env_log_file();
+    hcfg.log_level = orkdemo::EnvLogLevel("demo");
 
     OrkHostCallbacks hcb{};
     hcb.struct_size     = sizeof(OrkHostCallbacks);
@@ -356,46 +319,46 @@ RoundResult RunRound(const char* label, bool encryption, int timeoutSec)
     hcb.on_payload      = &HostOnPayload;
     hcb.on_stats        = &HostOnStats;
 
+    OrkHost host = nullptr;
     OrkError e = ork_host_create(&hcfg, &hcb, &host);
     if (e != OrkOk || host == nullptr)
     {
         res.error = std::string("ork_host_create: ") + ork_last_error();
         std::fprintf(stderr, "[round] %s\n", res.error.c_str());
-        return res;
+        return false;
     }
     res.hostCreated = true;
-    hctx.host = host;
+    hctx.host = host;                 // 回调里要用（get_connection_info / send）
 
     e = ork_host_start(host);
     if (e != OrkOk)
     {
         res.error = std::string("ork_host_start: ") + ork_last_error();
         std::fprintf(stderr, "[round] %s\n", res.error.c_str());
-        ork_host_destroy(host);
-        return res;
+        DestroyHost(host);
+        return false;
     }
     std::printf("[host] started  sizeof(OrkHostConfig)=%zu  sizeof(OrkHostCallbacks)=%zu\n",
                 sizeof(OrkHostConfig), sizeof(OrkHostCallbacks));
+    std::fflush(stdout);
 
-    // ---- 2. Client -------------------------------------------------------
-    ClientCtx cctx;
-    OrkClientHandle client = nullptr;
+    outHost = host;
+    return true;
+}
 
-    OrkClientConfig ccfg{};                     // v2 布局，96 字节
-    ccfg.struct_size               = sizeof(OrkClientConfig);
-    ccfg.host                      = "127.0.0.1";
-    ccfg.tcp_port                  = port;
-    ccfg.udp_port                  = port;      // ★ 留 0 会回落默认 9401，必然连不上
-    ccfg.enable_kcp                = 1;
-    ccfg.enable_encryption         = encryption ? 1 : 0;   // 意向；权威在服务端
-    ccfg.max_packet_size           = 1200;
-    ccfg.connect_timeout_ms        = 5000;
-    ccfg.kcp_stream_mode           = 0;         // 必须 0（消息模式帧定界）
-    ccfg.bootstrap_security_mode   = OrkBootstrapSecurity_PlaintextDev;
-    ccfg.tls_ca_file               = nullptr;
-    ccfg.tls_expected_server_name  = nullptr;
-    ccfg.tls_use_system_trust_store= 0;
-    ccfg.tls_handshake_timeout_ms  = 5000;
+// ---- 2. Client ------------------------------------------------------------
+/**
+ * @brief 建 client、填期望帧、Connect
+ * @param[out] outClient  成功时写入句柄；失败时调用方只需再拆 host
+ */
+bool CreateClient(uint16_t port, bool encryption, ClientCtx& cctx,
+                  OrkClientHandle& outClient, RoundResult& res)
+{
+    // v2 布局（96 字节）；udp_port == tcp_port、kcp_stream_mode == 0 等
+    // 不变式同样由共享填充函数保证（F8）。
+    OrkClientConfig ccfg{};
+    ork_demo_fill_client_config(&ccfg, port, encryption ? 1 : 0,
+                                /*connect_timeout_ms=*/5000);
 
     OrkClientCallbacks ccb{};
     ccb.struct_size     = sizeof(OrkClientCallbacks);
@@ -404,21 +367,21 @@ RoundResult RunRound(const char* label, bool encryption, int timeoutSec)
     ccb.on_disconnected = &ClientOnDisconnected;
     ccb.on_payload      = &ClientOnPayload;
 
-    e = ork_client_create(&ccfg, &ccb, &client);
+    OrkClientHandle client = nullptr;
+    OrkError e = ork_client_create(&ccfg, &ccb, &client);
     if (e != OrkOk || client == nullptr)
     {
         res.error = std::string("ork_client_create: ") + ork_client_last_error();
         std::fprintf(stderr, "[round] %s\n", res.error.c_str());
-        ork_host_stop(host);
-        ork_host_destroy(host);
-        return res;
+        return false;
     }
     res.clientCreated = true;
     std::printf("[client] created  sizeof(OrkClientConfig)=%zu (v2)  "
                 "ORK_CLIENT_CONFIG_V1_SIZE=%u  state=%s\n",
                 sizeof(OrkClientConfig),
                 static_cast<unsigned>(ORK_CLIENT_CONFIG_V1_SIZE),
-                ClientStateName(ork_client_get_state(client)));
+                orkdemo::ClientStateName(ork_client_get_state(client)));
+    std::fflush(stdout);
 
     // 期望帧（Connect 之前就要就位：on_connected 之后紧接着就会收到回显）
     orkdemo::BuildEchoFrame(cctx.frameReliable,   orkdemo::kMarkerReliable);
@@ -430,63 +393,91 @@ RoundResult RunRound(const char* label, bool encryption, int timeoutSec)
         res.error = std::string("ork_client_connect: ") + ork_client_last_error();
         std::fprintf(stderr, "[round] %s\n", res.error.c_str());
         ork_client_destroy(client);
-        ork_host_stop(host);
-        ork_host_destroy(host);
-        return res;
+        return false;
     }
 
-    // ---- 3. 手动驱动客户端（Client 没有内部线程！）------------------------
-    //    同时在 on_connected 之后补发两通道探针。
-    const double deadline = orkdemo::NowMs() + static_cast<double>(timeoutSec) * 1000.0;
-    OrkClientState last = OrkClientState_Disconnected;
-    bool   sentReliable = false;
-    int    udpAttempts  = 0;
-    double nextUdpAt    = 0.0;      // Unreliable 重发节流（150ms 一次，最多 8 次）
+    outClient = client;
+    return true;
+}
 
-    while (orkdemo::NowMs() < deadline)
+// ---- 3. 手动驱动客户端（Client 没有内部线程！）----------------------------
+/**
+ * 双通道探针的 C ABI Driver 适配（F2）。
+ *
+ * 循环节奏（先发 Reliable、Unreliable 按 150ms 重试至多 8 次、收到回显即停）
+ * 由 orkdemo::RunDualChannelProbe 统一给出，与 demo 02（纯 C 函数指针版）、
+ * demo 04 / test_cpp_roundtrip（C++ SDK 版）是同一套语义。
+ */
+struct CAbiProbeDriver
+{
+    OrkClientHandle client;
+    ClientCtx&      ctx;
+    OrkClientState  cur  = OrkClientState_Disconnected;
+    OrkClientState  last = OrkClientState_Disconnected;
+
+    bool ShouldStop() const noexcept { return false; }   // 本 demo 不响应 Ctrl+C
+
+    // pump_once 的 OrkError 一律忽略（与改造前一致）：出错会在状态机与
+    // 回显断言上暴露出来，不在这里提前退出。
+    bool Pump() { ork_client_pump_once(client); return true; }
+
+    void OnTick()
     {
-        ork_client_pump_once(client);
-
-        const OrkClientState st = ork_client_get_state(client);
-        if (st != last)
-        {
-            std::printf("[client] state: %s -> %s\n", ClientStateName(last), ClientStateName(st));
-            std::fflush(stdout);
-            last = st;
-        }
-
-        if (st == OrkClientState_Connected)
-        {
-            if (!sentReliable)
-            {
-                const OrkSendResult r = ork_client_send(
-                    client, cctx.frameReliable.data(),
-                    static_cast<uint32_t>(cctx.frameReliable.size()), OrkChannel_Reliable);
-                std::printf("[client] -> Reliable(KCP)   %zu B send=%s\n",
-                            cctx.frameReliable.size(), SendResultName(r));
-                sentReliable = (r == OrkSend_Ok);
-            }
-            // Unreliable 走裸 UDP，握手刚完成时路由可能还没就绪：
-            // 最多重试 8 次，每次间隔 150ms，收到回显即停。
-            if (!cctx.unreliableEcho.load() && udpAttempts < 8
-                && orkdemo::NowMs() >= nextUdpAt)
-            {
-                const OrkSendResult r = ork_client_send(
-                    client, cctx.frameUnreliable.data(),
-                    static_cast<uint32_t>(cctx.frameUnreliable.size()), OrkChannel_Unreliable);
-                ++udpAttempts;
-                nextUdpAt = orkdemo::NowMs() + 150.0;
-                std::printf("[client] -> Unreliable(UDP) %zu B attempt=%d send=%s\n",
-                            cctx.frameUnreliable.size(), udpAttempts, SendResultName(r));
-            }
-
-            if (cctx.reliableEcho.load() && cctx.unreliableEcho.load()) break;
-        }
-
-        orkdemo::SleepMs(5);
+        cur = ork_client_get_state(client);
+        if (cur == last) return;
+        std::printf("[client] state: %s -> %s\n",
+                    orkdemo::ClientStateName(last), orkdemo::ClientStateName(cur));
+        std::fflush(stdout);
+        last = cur;
     }
 
-    // ---- 4. 让 OnStats 至少落一次（~1Hz），否则 crypto_fail_* 恒为 0 没意义 --
+    bool Connected()    const noexcept { return cur == OrkClientState_Connected; }
+    bool Disconnected() const noexcept { return false; }   // 靠超时兜底
+    bool ReliableEchoed()   const noexcept { return ctx.reliableEcho.load(); }
+    bool UnreliableEchoed() const noexcept { return ctx.unreliableEcho.load(); }
+    void ClearReliableEcho() noexcept { ctx.reliableEcho.store(false); }
+
+    bool SendReliable(int /*round*/)
+    {
+        const OrkSendResult r = ork_client_send(
+            client, ctx.frameReliable.data(),
+            static_cast<uint32_t>(ctx.frameReliable.size()), OrkChannel_Reliable);
+        std::printf("[client] -> Reliable(KCP)   %zu B send=%s\n",
+                    ctx.frameReliable.size(), orkdemo::SendResultName(r));
+        std::fflush(stdout);
+        return r == OrkSend_Ok;
+    }
+
+    // Unreliable 走裸 UDP，握手刚完成时路由可能还没就绪：
+    // 最多重试 8 次，每次间隔 150ms，收到回显即停。
+    bool SendUnreliable(int attempt)
+    {
+        const OrkSendResult r = ork_client_send(
+            client, ctx.frameUnreliable.data(),
+            static_cast<uint32_t>(ctx.frameUnreliable.size()), OrkChannel_Unreliable);
+        std::printf("[client] -> Unreliable(UDP) %zu B attempt=%d send=%s\n",
+                    ctx.frameUnreliable.size(), attempt, orkdemo::SendResultName(r));
+        std::fflush(stdout);
+        return r == OrkSend_Ok;
+    }
+};
+
+orkdemo::DualChannelProbeResult RunProbeLoop(OrkClientHandle client, ClientCtx& cctx,
+                                            int timeoutSec)
+{
+    CAbiProbeDriver drv{client, cctx};
+    orkdemo::DualChannelProbeParams params;
+    params.reliableRounds = 1;                   // 本 demo 每轮只发一帧探针
+    params.timeoutMs      = timeoutSec * 1000;
+    params.pumpSleepMs    = ORK_PUMP_SLEEP_MS;   // 5ms
+    return orkdemo::RunDualChannelProbe(drv, params);
+}
+
+// ---- 4/5. 等统计快照 + 收集证据 -------------------------------------------
+void CollectEvidence(OrkClientHandle client, OrkHost host,
+                     HostCtx& hctx, ClientCtx& cctx, RoundResult& res)
+{
+    // 让 OnStats 至少落一次（~1Hz），否则 crypto_fail_* 恒为 0 没意义
     std::printf("[round] 等待统计快照 (~1.3s) ...\n");
     std::fflush(stdout);
     const double statsUntil = orkdemo::NowMs() + 1300.0;
@@ -496,7 +487,6 @@ RoundResult RunRound(const char* label, bool encryption, int timeoutSec)
         orkdemo::SleepMs(20);
     }
 
-    // ---- 5. 收集证据 ------------------------------------------------------
     OrkConnectionInfo info{};
     info.struct_size = sizeof(OrkConnectionInfo);
     if (ork_host_get_connection_info(host, cctx.connId.load(), &info) == OrkOk)
@@ -515,8 +505,7 @@ RoundResult RunRound(const char* label, bool encryption, int timeoutSec)
     st.struct_size = sizeof(OrkStats);
     if (ork_host_get_stats(host, &st) == OrkOk)
     {
-        res.cryptoFails = st.crypto_fail_aead + st.crypto_fail_replay
-                        + st.crypto_fail_expired + st.crypto_fail_malformed;
+        res.cryptoFails = orkdemo::CryptoFailTotal(st);      // F9
         res.bytesIn  = static_cast<unsigned long long>(st.bytes_in);
         res.bytesOut = static_cast<unsigned long long>(st.bytes_out);
         std::printf("[host] stats: aead=%llu replay=%llu expired=%llu malformed=%llu "
@@ -527,6 +516,7 @@ RoundResult RunRound(const char* label, bool encryption, int timeoutSec)
                     static_cast<unsigned long long>(st.crypto_fail_malformed),
                     static_cast<unsigned long long>(st.decode_failures),
                     res.bytesIn, res.bytesOut, st.active_connections);
+        std::fflush(stdout);
     }
 
     res.connected      = cctx.connected.load();
@@ -535,18 +525,57 @@ RoundResult RunRound(const char* label, bool encryption, int timeoutSec)
     res.hostConnId     = hctx.connId.load();
     res.clientConnId   = cctx.connId.load();
     if (cctx.mismatch.load()) res.error = "回显字节不一致";
+}
 
-    // ---- 6. 拆除 ---------------------------------------------------------
-    ork_client_disconnect(client);
-    const double drainUntil = orkdemo::NowMs() + 2000.0;
-    while (orkdemo::NowMs() < drainUntil && !cctx.disconnected.load())
+// ---- 6. 拆除 --------------------------------------------------------------
+void Teardown(OrkClientHandle client, OrkHost host, ClientCtx& cctx)
+{
+    DestroyClient(client, cctx);
+    DestroyHost(host);
+}
+
+// ===========================================================================
+// 一轮 A/B 对照：编排上面 5 步 + 判定
+// ===========================================================================
+RoundResult RunRound(const char* label, bool encryption, int timeoutSec)
+{
+    RoundResult res;
+
+    std::printf("\n");
+    orkdemo::PrintBannerRule();
+    std::printf(" %s · enable_encryption = %d\n", label, encryption ? 1 : 0);
+    orkdemo::PrintBannerRule();
+    std::fflush(stdout);
+
+    // ---- 0. 端口：TCP bootstrap 与 UDP/KCP 共用，必须两边都空闲 -----------
+    const uint16_t port = orkdemo::PickFreePort();
+    if (port == 0)
     {
-        ork_client_pump_once(client);
-        orkdemo::SleepMs(10);
+        res.error = "PickFreePort 失败";
+        std::fprintf(stderr, "[round] %s\n", res.error.c_str());
+        return res;
     }
-    ork_client_destroy(client);      // 传 NULL 也安全，这里非 NULL
-    ork_host_stop(host);
-    ork_host_destroy(host);
+    std::printf("[round] loopback 端口 = %u (TCP + UDP 共用)\n", static_cast<unsigned>(port));
+    std::fflush(stdout);
+
+    HostCtx         hctx;
+    ClientCtx       cctx;
+    OrkHost         host   = nullptr;
+    OrkClientHandle client = nullptr;
+
+    if (!CreateHost(port, encryption, hctx, host, res)) return res;
+    if (!CreateClient(port, encryption, cctx, client, res))
+    {
+        DestroyHost(host);
+        return res;
+    }
+
+    const orkdemo::DualChannelProbeResult probe = RunProbeLoop(client, cctx, timeoutSec);
+    if (probe.timedOut)
+        std::fprintf(stderr, "[round] 双通道探针超时（%d s）\n", timeoutSec);
+
+    CollectEvidence(client, host, hctx, cctx, res);
+    Teardown(client, host, cctx);
 
     res.ok = res.connected && res.reliableEcho && res.unreliableEcho
           && res.cryptoFails == 0 && res.error.empty();
@@ -559,7 +588,7 @@ void PrintRow(const char* label, bool expectEnc, const RoundResult& r)
                 "connId=%u/%u  echo R/U=%s/%s  cryptoFail=%llu  bytes in/out=%llu/%llu  %s\n",
                 label, expectEnc ? 1 : 0, r.encryptionActive, expectEnc ? 1 : 0,
                 r.encryptionActive == (expectEnc ? 1 : 0) ? "OK" : "MISMATCH",
-                r.linkType >= 0 ? LinkName(static_cast<uint32_t>(r.linkType)) : "?",
+                r.linkType >= 0 ? orkdemo::LinkName(static_cast<uint32_t>(r.linkType)) : "?",
                 r.hostConnId, r.clientConnId,
                 r.reliableEcho ? "OK" : "FAIL",
                 r.unreliableEcho ? "OK" : "FAIL",
@@ -613,28 +642,27 @@ int main(int argc, char** argv)
         return 2;
     }
 
-    std::printf("=============================================================\n");
+    orkdemo::PrintBannerRule();
     std::printf(" Demo 06 · C ABI 加密：AEAD 密钥协商与透明收发\n");
     std::printf(" ORK_ABI_VERSION=%u  sizeof(OrkHostConfig)=%zu\n",
                 ork_abi_version(), sizeof(OrkHostConfig));
     std::printf(" sizeof(OrkClientConfig)=%zu (v2)  ORK_CLIENT_CONFIG_V1_SIZE=%u\n",
                 sizeof(OrkClientConfig), static_cast<unsigned>(ORK_CLIENT_CONFIG_V1_SIZE));
     std::printf(" cipher = ChaCha20-Poly1305-IETF（密钥来自 Bootstrap V2 帧的 c2sKey/s2cKey）\n");
-    std::printf("=============================================================\n");
+    orkdemo::PrintBannerRule();
     std::fflush(stdout);
 
     RoundResult a, b;
     if (runA) a = RunRound("Round A (加密)",   true,  timeoutSec);
     if (runB) b = RunRound("Round B (对照·明文)", false, timeoutSec);
 
-    std::printf("\n=============================================================\n");
-    std::printf(" 结果汇总\n");
-    std::printf("=============================================================\n");
+    std::printf("\n");
+    orkdemo::PrintBanner("结果汇总");
     bool ok = true;
     if (runA) { PrintRow("Round A 加密",   true,  a); ok = ok && a.ok && a.encryptionActive == 1; }
     if (runB) { PrintRow("Round B 对照",   false, b); ok = ok && b.ok && b.encryptionActive == 0; }
 
-    std::printf("-------------------------------------------------------------\n");
+    orkdemo::PrintSeparator();
     if (runA && runB)
     {
         std::printf(" 结论：encryption_active 随服务端 enable_encryption 翻转 (%d -> %d)，\n"

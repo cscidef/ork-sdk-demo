@@ -1,30 +1,18 @@
 """在线测试 — 连接并 echo（Reliable/KCP + Unreliable/UDP）。
 
-依赖 `server` fixture 自动启停 demo 服务端。走真实传输路径：
+依赖共享 `session` fixture（→ `server` 自动启停 demo 服务端）。走真实传输路径：
 TCP bootstrap → UDP/KCP → Handshake V2 → 双通道 25B ORKBENCH1 回显。
 """
 
 from __future__ import annotations
 
-import pytest
-
 from lib.demo_helpers import (
     RELIABLE_MARKER,
     UNRELIABLE_MARKER,
-    connect_verbose,
     echo_once_reliable,
     echo_once_unreliable,
     marker_int,
 )
-
-
-@pytest.fixture
-def session(server, host, port):
-    s = connect_verbose(host, port, "test-echo", quiet=True)
-    try:
-        yield s
-    finally:
-        s.close()
 
 
 def test_bootstrap_assigns_connection_id(session):

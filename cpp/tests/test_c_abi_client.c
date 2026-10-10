@@ -22,135 +22,32 @@
  * 退出码：0 = 全部断言通过；1 = 有断言失败。
  */
 
-#include "ork/sdk/c/ork_client_abi.h"
+/* demo_support_c.h 提供 ork_client_abi.h、平台差异宏、计时 / 睡眠、
+ * ork_demo_pick_closed_tcp_port()（bind 后立即 close，让 connect 吃 RST）
+ * 与 ork_demo_fill_client_config()。 */
+#include "demo_support_c.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(_WIN32)
-#  include <winsock2.h>
-#  include <ws2tcpip.h>
-#  include <windows.h>
-#  define ORK_CLOSESOCK closesocket
-typedef SOCKET ork_sock_t;
-#  define ORK_SOCK_INVALID INVALID_SOCKET
-static void sleep_ms(int ms) { Sleep((DWORD)ms); }
-static double now_ms(void) { return (double)GetTickCount64(); }
-#else
-#  include <arpa/inet.h>
-#  include <netinet/in.h>
-#  include <sys/socket.h>
-#  include <time.h>
-#  include <unistd.h>
-#  define ORK_CLOSESOCK close
-typedef int ork_sock_t;
-#  define ORK_SOCK_INVALID (-1)
-static void sleep_ms(int ms)
-{
-    struct timespec ts;
-    ts.tv_sec  = ms / 1000;
-    ts.tv_nsec = (long)(ms % 1000) * 1000000L;
-    nanosleep(&ts, NULL);
-}
-static double now_ms(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1.0e6;
-}
-#endif
-
 /* -------------------------------------------------------------------------- */
-static int g_checks   = 0;
-static int g_failures = 0;
-
-static void check(int cond, const char* label, int line)
-{
-    ++g_checks;
-    if (cond)
-    {
-        printf("  [ok]   %s\n", label);
-    }
-    else
-    {
-        ++g_failures;
-        printf("  [FAIL] %s   (line %d)\n", label, line);
-        printf("         ork_client_last_error() = \"%s\"\n", ork_client_last_error());
-    }
-    fflush(stdout);
-}
-#define CHECK(cond, label) check((cond), (label), __LINE__)
-
-static void check_u32(unsigned long long actual, unsigned long long expected,
-                      const char* label, int line)
-{
-    ++g_checks;
-    if (actual == expected)
-    {
-        printf("  [ok]   %s (= %llu)\n", label, actual);
-    }
-    else
-    {
-        ++g_failures;
-        printf("  [FAIL] %s: got %llu, expected %llu   (line %d)\n",
-               label, actual, expected, line);
-        printf("         ork_client_last_error() = \"%s\"\n", ork_client_last_error());
-    }
-    fflush(stdout);
-}
-#define CHECK_EQ(actual, expected, label) \
-    check_u32((unsigned long long)(actual), (unsigned long long)(expected), (label), __LINE__)
-
-/** @brief 找一个当前无人监听的 loopback TCP 端口（bind 后立即 close） */
-static uint16_t pick_closed_port(void)
-{
-    int attempt;
-#if defined(_WIN32)
-    WSADATA wsa;
-    WSAStartup(MAKEWORD(2, 2), &wsa);
-#endif
-    for (attempt = 0; attempt < 64; ++attempt)
-    {
-        struct sockaddr_in addr;
-        socklen_t len = (socklen_t)sizeof(addr);
-        uint16_t port;
-        ork_sock_t s = socket(AF_INET, SOCK_STREAM, 0);
-        if (s == ORK_SOCK_INVALID) continue;
-
-        memset(&addr, 0, sizeof(addr));
-        addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        addr.sin_port = 0;
-        if (bind(s, (struct sockaddr*)&addr, sizeof(addr)) != 0)
-        {
-            ORK_CLOSESOCK(s);
-            continue;
-        }
-        if (getsockname(s, (struct sockaddr*)&addr, &len) != 0)
-        {
-            ORK_CLOSESOCK(s);
-            continue;
-        }
-        port = (uint16_t)ntohs(addr.sin_port);
-        ORK_CLOSESOCK(s);          /* 关闭后端口无人监听 → connect 会被 RST */
-        return port;
-    }
-    return 0;
-}
+/* 极简断言框架（共享）：失败时顺带打出 Client 侧的错误串                       */
+/* -------------------------------------------------------------------------- */
+#define ORK_TEST_PRINT_LAST_ERROR() \
+    printf("         ork_client_last_error() = \"%s\"\n", ork_client_last_error())
+#include "ork_test_assert.h"
 
 /* -------------------------------------------------------------------------- */
 static volatile uint32_t g_connected    = 0;
 static volatile uint32_t g_disconnected = 0;
 static volatile uint32_t g_payload      = 0;
-static volatile uint32_t g_conn_id      = 0;
 static volatile uint32_t g_reason       = 0;
 
 static void cb_connected(void* user, uint32_t connection_id)
 {
-    (void)user;
+    (void)user; (void)connection_id;
     ++g_connected;
-    g_conn_id = connection_id;
 }
 static void cb_disconnected(void* user, uint32_t reason)
 {
@@ -164,23 +61,16 @@ static void cb_payload(void* user, const uint8_t* data, uint32_t size, uint32_t 
     ++g_payload;
 }
 
+/**
+ * @brief 一份「所有不变式都满足」的 v2 Client 配置
+ *
+ * udp_port == tcp_port、kcp_stream_mode == 0、struct_size == 96 等由
+ * ork_demo_fill_client_config 统一保证；这里只传入测试专属的快速失败超时。
+ */
 static void fill_valid_config(OrkClientConfig* c, uint16_t port)
 {
-    memset(c, 0, sizeof(*c));
-    c->struct_size                = (uint32_t)sizeof(OrkClientConfig);   /* v2 = 96 */
-    c->host                       = "127.0.0.1";
-    c->tcp_port                   = port;
-    c->udp_port                   = port;   /* ★ 必须与 tcp_port 相同（留 0 会回落 9401） */
-    c->enable_kcp                 = 1;
-    c->enable_encryption          = 1;
-    c->max_packet_size            = 1200;
-    c->connect_timeout_ms         = 1500;   /* 测试要快速失败 */
-    c->kcp_stream_mode            = 0;      /* 必须 0 */
-    c->bootstrap_security_mode    = OrkBootstrapSecurity_PlaintextDev;
-    c->tls_ca_file                = NULL;
-    c->tls_expected_server_name   = NULL;
-    c->tls_use_system_trust_store = 0;
-    c->tls_handshake_timeout_ms   = 1500;
+    ork_demo_fill_client_config(c, port, /*enable_encryption=*/1,
+                                /*connect_timeout_ms=*/1500);   /* 测试要快速失败 */
 }
 
 static void fill_callbacks(OrkClientCallbacks* cb)
@@ -232,12 +122,12 @@ int main(void)
     uint16_t closed_port;
     OrkError e;
 
-    printf("=============================================================\n");
+    printf(ORK_BANNER_RULE "\n");
     printf(" test_c_abi_client · C ABI Client smoke\n");
     printf(" sizeof(OrkClientConfig)=%zu (v2)  ORK_CLIENT_CONFIG_V1_SIZE=%u\n",
            sizeof(OrkClientConfig), (unsigned)ORK_CLIENT_CONFIG_V1_SIZE);
     printf(" sizeof(OrkClientCallbacks)=%zu\n", sizeof(OrkClientCallbacks));
-    printf("=============================================================\n");
+    printf(ORK_BANNER_RULE "\n");
 
     /* 结构体布局门禁：v2 必须是 96 字节，否则整个 ABI 假设都不成立 */
     CHECK_EQ(sizeof(OrkClientConfig), 96u, "sizeof(OrkClientConfig) == 96 (v2 LP64)");
@@ -261,8 +151,8 @@ int main(void)
 
     /* ---- 2. create 参数校验 -------------------------------------------- */
     printf("\n[2] ork_client_create 参数校验\n");
-    closed_port = pick_closed_port();
-    CHECK(closed_port != 0, "pick_closed_port() 拿到无人监听的端口");
+    closed_port = ork_demo_pick_closed_tcp_port();
+    CHECK(closed_port != 0, "ork_demo_pick_closed_tcp_port() 拿到无人监听的端口");
     printf("      loopback 端口 = %u\n", (unsigned)closed_port);
 
     fill_callbacks(&cb);
@@ -377,7 +267,7 @@ int main(void)
     e = ork_client_create(&cfg, &cb, &client);
     CHECK_EQ(e, OrkOk, "create(valid v2) -> OrkOk");
     CHECK(client != NULL, "句柄非 NULL");
-    if (client == NULL) { printf("\nFAIL (%d/%d)\n", g_failures, g_checks); return 1; }
+    if (client == NULL) ORK_TEST_ABORT();
 
     CHECK_EQ(ork_client_get_state(client), OrkClientState_Disconnected,
            "★ 初始状态 == Disconnected");
@@ -385,16 +275,14 @@ int main(void)
            "★ 初始 connection_id == 0");
     CHECK_EQ(ork_client_pump_once(client), OrkOk, "pump_once(未连接) -> OrkOk");
 
-    {   /* 未连接时发送必须被拒 */
-        static const uint8_t blob[25] = {
-            'O','R','K','B','E','N','C','H','1', 'O','R','K','D','E','M','O','1',
-            0,0,0,0,0,0,0,0
-        };
+    {   /* 未连接时发送必须被拒 —— 帧内容无关紧要，用标准 25B 探针帧即可 */
+        uint8_t blob[ORK_ECHO_FRAME_SIZE];
+        ork_demo_build_frame(blob, ORK_MARKER_RELIABLE);
         CHECK_EQ(ork_client_send(client, blob, (uint32_t)sizeof(blob), OrkChannel_Reliable),
                OrkSend_NotConnected, "send(未连接) -> NotConnected");
-        CHECK_EQ(ork_client_send(client, blob, 25u, OrkChannel_Unreliable),
+        CHECK_EQ(ork_client_send(client, blob, ORK_ECHO_FRAME_SIZE, OrkChannel_Unreliable),
                OrkSend_NotConnected, "send(未连接, Unreliable) -> NotConnected");
-        CHECK_EQ(ork_client_send(client, NULL, 25u, OrkChannel_Reliable),
+        CHECK_EQ(ork_client_send(client, NULL, ORK_ECHO_FRAME_SIZE, OrkChannel_Reliable),
                OrkSend_BadState, "send(NULL data, size>0) -> BadState");
     }
     CHECK_EQ(ork_client_disconnect(client), OrkOk, "disconnect(未连接) -> OrkOk（幂等）");
@@ -407,13 +295,13 @@ int main(void)
     CHECK_EQ(ork_client_connect(client), OrkErr_AlreadyStarted,
            "重复 connect -> AlreadyStarted");
     {
-        const double deadline = now_ms() + 8000.0;
+        const uint64_t deadline = ork_demo_now_ms() + 8000u;
         int pumped = 0;
-        while (now_ms() < deadline && g_disconnected == 0 && pumped < 4000)
+        while (ork_demo_now_ms() < deadline && g_disconnected == 0 && pumped < 4000)
         {
             ork_client_pump_once(client);
             ++pumped;
-            sleep_ms(2);
+            ork_demo_sleep_ms(2);
         }
         printf("      pumped=%d 次, on_disconnected=%u reason=%u state=%d\n",
                pumped, (unsigned)g_disconnected, (unsigned)g_reason,
@@ -431,11 +319,11 @@ int main(void)
     printf("\n[5] 断开后可再次 connect（重连语义）\n");
     CHECK_EQ(ork_client_connect(client), OrkOk, "断开后再次 connect -> OrkOk");
     {
-        const double deadline = now_ms() + 4000.0;
-        while (now_ms() < deadline && g_disconnected < 2u)
+        const uint64_t deadline = ork_demo_now_ms() + 4000u;
+        while (ork_demo_now_ms() < deadline && g_disconnected < 2u)
         {
             ork_client_pump_once(client);
-            sleep_ms(2);
+            ork_demo_sleep_ms(2);
         }
         CHECK(g_disconnected >= 1u, "第二次 connect 也走到了终态");
     }
@@ -449,14 +337,5 @@ int main(void)
     CHECK(1, "destroy(NULL) 再次调用安全");
 
     /* ---- 汇总 ----------------------------------------------------------- */
-    printf("\n=============================================================\n");
-    if (g_failures == 0)
-    {
-        printf("PASS: test_c_abi_client  (%d/%d checks)\n", g_checks - g_failures, g_checks);
-        printf("=============================================================\n");
-        return 0;
-    }
-    printf("FAIL: test_c_abi_client  (%d failures / %d checks)\n", g_failures, g_checks);
-    printf("=============================================================\n");
-    return 1;
+    ORK_TEST_SUMMARY("test_c_abi_client");
 }

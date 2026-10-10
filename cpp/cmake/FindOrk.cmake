@@ -24,7 +24,6 @@
 #   ORK_INCLUDE_DIR             cpp/include            (Ork public headers)
 #   ORK_THIRDPARTY_INCLUDE_DIR  cpp/thirdparty/include (asio, fmt, ikcp.h, ...)
 #   ORK_LIBRARY_DIR             cpp/lib/<triplet>
-#   ORK_LIBRARIES               ordered list of every static library to link
 #   ORK_ABI_VERSION             value of ORK_ABI_VERSION in the shipped header
 #
 # System dependencies that are NOT vendored (must be present on the machine):
@@ -97,31 +96,32 @@ if(NOT IS_DIRECTORY "${ORK_LIBRARY_DIR}")
 endif()
 
 # ---------------------------------------------------------------------------
-# 3. The Ork static libraries, in link order.
+# 3. Existence check for every archive the imported targets will reference.
 #    ork_core      — crypto/connection/transport/codec/sdk/client aggregate
 #    ork_platform  — config / logging / time / secure random (leaf library)
 #    kcp, fmt, yaml-cpp — third-party pieces compiled as static archives
 #    (asio, spdlog and concurrentqueue are header-only → nothing to link)
+#
+#    This loop only validates; it collects nothing. The actual link line is
+#    assembled on Ork::Core / Ork::Platform in section 9, so a half-unpacked
+#    SDK fails here with one clear message instead of at link time with a wall
+#    of undefined symbols.
+#
+#    Only GNU-style "lib<name>.a" is recognised — currently macOS/Linux only.
 # ---------------------------------------------------------------------------
 set(ORK_LIB_NAMES ork_core ork_platform kcp fmt yaml-cpp)
-set(ORK_LIBRARIES "")
 foreach(_name IN LISTS ORK_LIB_NAMES)
     set(_path "${ORK_LIBRARY_DIR}/lib${_name}.a")
     if(NOT EXISTS "${_path}")
-        # Windows toolchains may produce .lib instead of .a
-        if(WIN32 AND EXISTS "${ORK_LIBRARY_DIR}/${_name}.lib")
-            set(_path "${ORK_LIBRARY_DIR}/${_name}.lib")
-        else()
-            set(ORK_FOUND FALSE)
-            if(Ork_FIND_REQUIRED)
-                message(FATAL_ERROR
-                    "Missing Ork static library: ${_path}\n"
-                    "Re-pack the SDK for '${ORK_PLATFORM}' (see cpp/README.md).")
-            endif()
-            return()
+        set(ORK_FOUND FALSE)
+        if(Ork_FIND_REQUIRED)
+            message(FATAL_ERROR
+                "Missing Ork static library: ${_path}\n"
+                "Re-pack the SDK for '${ORK_PLATFORM}' (see cpp/README.md).\n"
+                "Only GNU-style .a archives are supported (currently macOS/Linux only).")
         endif()
+        return()
     endif()
-    list(APPEND ORK_LIBRARIES "${_path}")
 endforeach()
 
 set(ORK_CORE_LIBRARY "${ORK_LIBRARY_DIR}/libork_core.a")

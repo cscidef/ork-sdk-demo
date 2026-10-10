@@ -5,6 +5,8 @@ Ork Cipher v1 — Python 参考实现（与 C++ ork_cipher.cpp 对齐）
 规范：source/core/crypto/src/OrkTransportCipher_v1.md §22
 
 Phase 3.5: 明文模式也保留 15B 帧头（与 C++ Seal/Open 一致）。
+
+常量单一来源：CIPHER_VERSION 与帧头尺寸从 ork_frame 导入，避免双份定义漂移。
 """
 
 from __future__ import annotations
@@ -18,14 +20,14 @@ from nacl.bindings import (
     crypto_aead_chacha20poly1305_ietf_encrypt,
 )
 
-FRAME_HEADER_SIZE = 15  # ver(1)+seq(8)+payload_len(2)+packet_type(4)
-CIPHER_VERSION = 0x01
+# 帧头尺寸与版本号以 ork_frame 为唯一权威（无循环依赖：ork_frame 不 import 本模块）
+from .ork_frame import CIPHER_VERSION, ORK_FRAME_HEADER_SIZE as FRAME_HEADER_SIZE
+
 UDP_REPLAY_WINDOW = 256
 
 C2S = 0x00
 S2C = 0x01
 CHANNEL_RUDP = 0x01  # 概念上称为 RUDP（Reliable UDP），底层使用 KCP 库
-CHANNEL_KCP = CHANNEL_RUDP  # 向后兼容别名
 CHANNEL_UDP = 0x02
 
 
@@ -47,18 +49,6 @@ class CipherState:
     encryption_required: bool = False
     rudp: ChannelCipherState = field(default_factory=ChannelCipherState)  # 概念上称为 RUDP
     udp: ChannelCipherState = field(default_factory=ChannelCipherState)
-
-    @classmethod
-    def from_assign(cls, assign_msg) -> "CipherState":
-        """从 AssignConnection protobuf 消息构建（已废弃，保留兼容）。"""
-        return cls(
-            c2s_key=bytes(assign_msg.c2s_key),
-            s2c_key=bytes(assign_msg.s2c_key),
-            connection_id=assign_msg.connection_id,
-            session_token=assign_msg.session_token,
-            expire_at=assign_msg.expire_at,
-            encryption_required=assign_msg.encryption_required,
-        )
 
     @classmethod
     def from_bootstrap(cls, bootstrap: dict) -> "CipherState":
@@ -117,12 +107,9 @@ def make_aad(
     )
 
 
-def _select_seal_key(state: CipherState, direction: int) -> bytes:
+def _direction_key(state: CipherState, direction: int) -> bytes:
+    """按方向选择密钥（seal 用发送方向，open 用对端方向；语义一致）。"""
     return state.c2s_key if direction == C2S else state.s2c_key
-
-
-def _select_open_key(state: CipherState, peer_direction: int) -> bytes:
-    return state.c2s_key if peer_direction == C2S else state.s2c_key
 
 
 def _channel_state(state: CipherState, channel: int) -> ChannelCipherState:
@@ -182,17 +169,19 @@ def seal(
     seq = ch.tx_seq
     ch.tx_seq += 1
 
+    # 15B 帧头（明文/加密两分支共用，仅构造一次）
+    header = (
+        bytes([CIPHER_VERSION])
+        + seq.to_bytes(8, "little")
+        + len(plaintext).to_bytes(2, "little")
+        + packet_type.to_bytes(4, "little")
+    )
+
     # Phase 3.5: 明文模式保留 15B 帧头（与 C++ OrkCipher::Seal 一致）
     if not state.encryption_required:
-        return (
-            bytes([CIPHER_VERSION])
-            + seq.to_bytes(8, "little")
-            + len(plaintext).to_bytes(2, "little")
-            + packet_type.to_bytes(4, "little")
-            + plaintext
-        )
+        return header + plaintext
 
-    key = _select_seal_key(state, direction)
+    key = _direction_key(state, direction)
     nonce = make_nonce(CIPHER_VERSION, direction, channel, seq)
     aad = make_aad(
         state.connection_id,
@@ -203,13 +192,7 @@ def seal(
         len(plaintext),
     )
     sealed = crypto_aead_chacha20poly1305_ietf_encrypt(plaintext, aad, nonce, key)
-    return (
-        bytes([CIPHER_VERSION])
-        + seq.to_bytes(8, "little")
-        + len(plaintext).to_bytes(2, "little")
-        + packet_type.to_bytes(4, "little")
-        + sealed
-    )
+    return header + sealed
 
 
 def open_frame(
@@ -241,7 +224,7 @@ def open_frame(
     if channel == CHANNEL_UDP and not udp_cheap_filter(ch, seq):
         return None
 
-    key = _select_open_key(state, peer_direction)
+    key = _direction_key(state, peer_direction)
     nonce = make_nonce(CIPHER_VERSION, peer_direction, channel, seq)
     aad = make_aad(
         state.connection_id,
@@ -290,33 +273,11 @@ def _open_plaintext_frame(
 
     ch = _channel_state(state, channel)
     if channel == CHANNEL_RUDP:
-        if seq == 0 or seq <= ch.rudp_last_accepted_seq:
+        if not accept_rudp_replay(ch, seq):
             return None
-        ch.rudp_last_accepted_seq = seq
     else:
         if not udp_cheap_filter(ch, seq):
             return None
         commit_udp_replay(ch, seq)
 
     return frame[FRAME_HEADER_SIZE:FRAME_HEADER_SIZE + payload_len]
-
-
-def _smoke_test() -> None:
-    """与 ork_cipher_test.cpp MakeTestState 对齐的本地自测。"""
-    state = CipherState(
-        c2s_key=bytes([0x11] * 32),
-        s2c_key=bytes([0x22] * 32),
-        connection_id=0x12345678,
-        session_token=0xAABBCCDD,
-        encryption_required=True,
-    )
-    plain = bytes([0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02])
-    frame = seal(state, CHANNEL_RUDP, C2S, 5, plain)
-    assert frame is not None
-    opened = open_frame(state, CHANNEL_RUDP, C2S, 0, frame)
-    assert opened == plain
-    print("ork_cipher.py smoke test passed")
-
-
-if __name__ == "__main__":
-    _smoke_test()

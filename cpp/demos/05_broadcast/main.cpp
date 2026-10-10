@@ -79,8 +79,9 @@ using ork::sdk::BroadcastReport;
 using ork::sdk::Channel;
 using ork::sdk::ConnectionSet;
 
-// 四种 25B 探针帧的 marker（BuildEchoFrame 要求恰好 8 字节）
-constexpr std::string_view kMarkerProbe = "ORKDEMO1";  // 客户端 -> 服务端
+// 三种广播帧的 marker（BuildEchoFrame 要求恰好 8 字节）。
+// 客户端 -> 服务端那一帧用的是共享常量 orkdemo::kMarkerReliable（"ORKDEMO1"），
+// 与 demo 02 / 04 / 06 的探针协议同源，不再本地重定义一份（F7）。
 constexpr std::string_view kMarkerAll   = "ORKBCSTA";  // Broadcast(All())
 constexpr std::string_view kMarkerWhere = "ORKBCSTW";  // Broadcast(Where(!= origin))
 constexpr std::string_view kMarkerOf    = "ORKBCSTO";  // Broadcast(Of(ids))
@@ -90,11 +91,6 @@ std::atomic<bool> g_stop{false};
 // ---------------------------------------------------------------------------
 // 小工具
 // ---------------------------------------------------------------------------
-const char* ChannelName(Channel ch) noexcept
-{
-    return ch == Channel::Reliable ? "Reliable" : "Unreliable";
-}
-
 /** @brief 取 25B 帧的 marker（8 字节，不保证 NUL 结尾） */
 std::string_view FrameMarker(std::span<const uint8_t> payload) noexcept
 {
@@ -106,7 +102,7 @@ bool IsProbeFrame(std::span<const uint8_t> payload) noexcept
 {
     return payload.size() == orkdemo::kEchoFrameSize
         && orkdemo::IsEchoMagic(payload)
-        && FrameMarker(payload) == kMarkerProbe;
+        && FrameMarker(payload) == orkdemo::kMarkerReliable;
 }
 
 void PrintReport(const char* tag, const BroadcastReport& r)
@@ -159,7 +155,7 @@ public:
 
         const unsigned round = rounds_.fetch_add(1) + 1;
         std::printf("[host] round %u: probe %zu B from conn %u via %s -> Broadcast x3\n",
-                    round, payload.size(), origin, ChannelName(channel));
+                    round, payload.size(), origin, orkdemo::ChannelName(channel));
 
         std::array<uint8_t, orkdemo::kEchoFrameSize> frame{};
 
@@ -211,8 +207,7 @@ public:
         bytesOut_.store(stats.bytesOut);
         dropsQueueFull_.store(stats.dropsQueueFull);
         dropsTooLarge_.store(stats.dropsTooLarge);
-        cryptoFails_.store(stats.cryptoFailAead + stats.cryptoFailReplay
-                           + stats.cryptoFailExpired + stats.cryptoFailMalformed);
+        cryptoFails_.store(orkdemo::CryptoFailTotal(stats));   // F9
     }
 
     // ---- 只读访问器（主线程用）----
@@ -421,12 +416,13 @@ int RunFanoutSelfTest(SessionFramework& framework,
 
     // ---- 4. 齐射：每个客户端各发一帧探针 --------------------------------
     std::printf("\n[test] 齐射 %d 帧探针 (Reliable, 25 B, marker=%.*s)\n",
-                n, static_cast<int>(kMarkerProbe.size()), kMarkerProbe.data());
+                n, static_cast<int>(orkdemo::kMarkerReliable.size()),
+                orkdemo::kMarkerReliable.data());
     std::array<uint8_t, orkdemo::kEchoFrameSize> probe{};
     int sendFailures = 0;
     for (const auto& c : clients_)
     {
-        orkdemo::BuildEchoFrame(probe, kMarkerProbe);
+        orkdemo::BuildEchoFrame(probe, orkdemo::kMarkerReliable);
         const ork::platform::SendResult r =
             c->client->Send(probe, TransportChannel::Reliable);
         if (r != ork::platform::SendResult::Ok)
@@ -509,12 +505,13 @@ int RunFanoutSelfTest(SessionFramework& framework,
 
     // ---- 9. 判定 ---------------------------------------------------------
     const bool ok = settled && clientMatrixOk && serverCountersOk;
-    std::printf("\n-------------------------------------------------------------\n");
+    std::printf("\n");
+    orkdemo::PrintSeparator();
     std::printf(" clients=%d  settled=%s  clientMatrix=%s  serverCounters=%s\n",
                 n, settled ? "yes" : "NO(timeout)",
                 clientMatrixOk ? "OK" : "FAIL",
                 serverCountersOk ? "OK" : "FAIL");
-    std::printf("-------------------------------------------------------------\n");
+    orkdemo::PrintSeparator();
     std::printf("%s\n", ok ? "PASS: ISender::Broadcast fanout (All / Where / Of)"
                            : "FAIL: broadcast fanout mismatch");
     std::fflush(stdout);
@@ -577,12 +574,12 @@ int main(int argc, char** argv)
 
     orkdemo::InitLogging("05_broadcast");
 
-    std::printf("=============================================================\n");
+    orkdemo::PrintBannerRule();
     std::printf(" Demo 05 · ISender::Broadcast + ConnectionSet + BroadcastReport\n");
     std::printf(" port=%u  encryption=%s  clients=%d  timeout=%ds\n",
                 static_cast<unsigned>(port), encryption ? "on" : "off",
                 clientCount, timeoutSec);
-    std::printf("=============================================================\n");
+    orkdemo::PrintBannerRule();
 
     try
     {

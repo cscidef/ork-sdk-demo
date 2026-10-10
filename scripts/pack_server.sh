@@ -17,12 +17,21 @@
 #     are collected and rewritten; relative ones are left untouched.
 #   * Transitive dependencies are resolved (e.g. libssl -> libcrypto).
 #
+# Environment:
+#   ORK_ROOT   (required) path to the harmonia_ork checkout that built the SDK
+#   BUILD_DIR  (optional) defaults to ${ORK_ROOT}/build-demo
+#
 set -euo pipefail
 
 # --- Paths -------------------------------------------------------------------
-ORK_ROOT="${ORK_ROOT:-/Users/jonathan/hadoWorld/HADO-PROJ/harmonia_ork}"
+if [[ -z "${ORK_ROOT:-}" ]]; then
+    echo "ERROR: ORK_ROOT not set. Point it to your harmonia_ork checkout." >&2
+    echo "  export ORK_ROOT=/path/to/harmonia_ork" >&2
+    exit 1
+fi
+
 BUILD_DIR="${BUILD_DIR:-${ORK_ROOT}/build-demo}"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEMO_ROOT="$(dirname "$SCRIPT_DIR")"
 DEST="${DEMO_ROOT}/server/macos-arm64"
 
@@ -52,6 +61,23 @@ list_external_deps() {
         || true
 }
 
+# Rewrite dynamic library paths in a binary.
+# The dependency list is snapshotted to a temp file first because
+# install_name_tool mutates the very otool output we are iterating.
+# Usage: rewrite_deps <macho> <prefix>
+rewrite_deps() {
+    local macho="$1" prefix="$2"
+    local snapshot dep base
+    snapshot="$(mktemp -t orkrewrite)"
+    list_external_deps "$macho" > "$snapshot"
+    while IFS= read -r dep; do
+        [[ -z "$dep" ]] && continue
+        base="$(basename "$dep")"
+        install_name_tool -change "$dep" "${prefix}${base}" "$macho" 2>/dev/null || true
+    done < "$snapshot"
+    rm -f "$snapshot"
+}
+
 # --- 1. Clean + copy the binary ---------------------------------------------
 echo "=== [1/6] Copy embed_minimal ==="
 rm -rf "${DEST}/bin" "${DEST}/lib"
@@ -61,37 +87,28 @@ BIN="${DEST}/bin/embed_minimal"
 chmod +x "${BIN}"
 
 # --- 2. Collect dylibs transitively -----------------------------------------
-# NOTE: macOS ships bash 3.2 (no associative arrays), so we track state in
-# temp files:
-#   LIST_FILE   : every original absolute install path seen (may contain both
-#                 the /opt/homebrew/opt/... symlink form AND the /opt/homebrew/
-#                 Cellar/... real form for the SAME dylib). All variants are
-#                 recorded so install_name_tool -change can rewrite each one.
+# NOTE: macOS ships bash 3.2 (no associative arrays), so the "already copied"
+# set is tracked in a temp file:
 #   COPIED_FILE : basenames already copied into lib/ (dedup so we cp once).
 # Homebrew dylibs are read-only (0444); we chmod u+w after copying so that
 # install_name_tool and codesign can modify them.
 echo "=== [2/6] Collect non-system dylibs (transitive) ==="
-LIST_FILE="$(mktemp -t orkdeps)"
 COPIED_FILE="$(mktemp -t orkcopied)"
-trap 'rm -f "$LIST_FILE" "$COPIED_FILE"' EXIT
+trap 'rm -f "$COPIED_FILE"' EXIT
 
 queue=("${BIN}")
 qi=0
-while [ "$qi" -lt "${#queue[@]}" ]; do
+while [[ "$qi" -lt "${#queue[@]}" ]]; do
     current="${queue[$qi]}"
     qi=$((qi + 1))
     while IFS= read -r dep; do
-        [ -z "$dep" ] && continue
+        [[ -z "$dep" ]] && continue
         base="$(basename "$dep")"
-        # Record this path variant for the rewrite pass (dedup exact match).
-        if ! grep -Fxq "$dep" "$LIST_FILE"; then
-            echo "$dep" >> "$LIST_FILE"
-        fi
         # Copy only once per basename.
         if grep -Fxq "$base" "$COPIED_FILE"; then
             continue
         fi
-        if [ ! -f "$dep" ]; then
+        if [[ ! -f "$dep" ]]; then
             echo "WARNING: dependency not found on disk, skipping: $dep" >&2
             continue
         fi
@@ -104,31 +121,22 @@ while [ "$qi" -lt "${#queue[@]}" ]; do
     done < <(list_external_deps "$current")
 done
 
-if [ ! -s "$COPIED_FILE" ]; then
+if [[ ! -s "$COPIED_FILE" ]]; then
     echo "  (no external dylibs to bundle)"
 fi
 
 # --- 3. Rewrite install names in the binary ---------------------------------
 echo "=== [3/6] Rewrite binary install names -> @executable_path/../lib ==="
-while IFS= read -r orig; do
-    [ -z "$orig" ] && continue
-    base="$(basename "$orig")"
-    install_name_tool -change "$orig" "@executable_path/../lib/${base}" "${BIN}" 2>/dev/null || true
-done < "$LIST_FILE"
+rewrite_deps "${BIN}" "@executable_path/../lib/"
 
 # --- 4. Rewrite sibling cross-refs + ids inside each dylib ------------------
 echo "=== [4/6] Rewrite dylib cross-references -> @loader_path ==="
 for dylib in "${DEST}"/lib/*.dylib; do
-    [ -e "$dylib" ] || continue
-    self_base="$(basename "$dylib")"
+    [[ -e "$dylib" ]] || continue
     # Cross references to any other bundled dylib become @loader_path/<base>.
-    while IFS= read -r orig; do
-        [ -z "$orig" ] && continue
-        base="$(basename "$orig")"
-        install_name_tool -change "$orig" "@loader_path/${base}" "$dylib" 2>/dev/null || true
-    done < "$LIST_FILE"
+    rewrite_deps "$dylib" "@loader_path/"
     # Fix the dylib's own install name (id).
-    install_name_tool -id "@loader_path/${self_base}" "$dylib" 2>/dev/null || true
+    install_name_tool -id "@loader_path/$(basename "$dylib")" "$dylib" 2>/dev/null || true
 done
 
 # --- 5. Re-sign everything (arm64 requires a valid signature) ---------------

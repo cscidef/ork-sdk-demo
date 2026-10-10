@@ -43,15 +43,12 @@ from .ork_cipher import (
 )
 from .ork_frame import (
     BOOTSTRAP_FRAME_SIZE,
-    UDP_HANDSHAKE_V2_SIZE,
-    UDP_HANDSHAKE_V2_TYPE,
     build_handshake_v2_packet,
     decode_bootstrap_frame,
     handshake_counter_can_advance,
 )
 
 # ── UDP 线协议常量（与服务端 UdpTransportServer 一致）───────────────────────
-UDP_HANDSHAKE_V2 = 3   # UdpPacketType::HandshakeV2
 UDP_DATA = 2           # UdpPacketType::Data
 # UDP 数据包头：type(1B) + connectionId(4B BE) + payloadSize(2B BE) = 7B
 UDP_DATA_HEADER_SIZE = 7
@@ -123,23 +120,6 @@ def wrap_udp_data(connection_id: int, payload: bytes) -> bytes:
     return header + payload
 
 
-def wrap_udp_handshake(
-    connection_id: int,
-    client_nonce: bytes,
-    counter: int,
-    bootstrap_epoch: bytes,
-    c2s_key: bytes,
-) -> bytes:
-    """构造 42B Handshake V2 握手包（Rev 3 §5.5/§5.6）。
-
-    handshakeKey 由 c2sKey 经 HKDF-SHA-256 派生（info label "ORK-UDP-HS-C2S-v2"），
-    不复用数据通道密钥；authTag 覆盖除自身外全部 26B 明文字段。
-    """
-    return build_handshake_v2_packet(
-        connection_id, client_nonce, counter, bootstrap_epoch, c2s_key
-    )
-
-
 # --------------------------------------------------------------------------- #
 # 会话统计
 # --------------------------------------------------------------------------- #
@@ -148,7 +128,6 @@ def wrap_udp_handshake(
 @dataclass
 class SessionStats:
     tcp_bytes_rx: int = 0
-    tcp_bytes_tx: int = 0
     rudp_bytes_tx: int = 0            # Reliable(KCP) 通道发送字节
     udp_bytes_tx: int = 0             # Unreliable(UDP) 通道发送字节（含 7B 头）
     rudp_received: int = 0            # KCP 通道收到的 opaque 载荷计数
@@ -181,14 +160,14 @@ class OrkClientSession:
         self,
         host: str,
         port: int,
-        player_uuid: str = "ork-demo-client",
+        client_name: str = "ork-demo-client",
         *,
         connect_timeout: float = 5.0,
         ack_timeout: float = 10.0,
     ):
         self.host = host
         self.port = port
-        self.player_uuid = player_uuid
+        self.client_name = client_name
         self.connect_timeout = connect_timeout
         self.ack_timeout = ack_timeout
 
@@ -213,8 +192,6 @@ class OrkClientSession:
         self._clock_base = 0.0
         self.stats = SessionStats()
 
-        self._rx_payloads: list[bytes] = []       # KCP 通道非 bench opaque 载荷
-        self._udp_rx_payloads: list[bytes] = []   # UDP 通道非 bench opaque 载荷
         self._bench_rudp_rx: list[bytes] = []     # ORKBENCH1 KCP 回显
         self._bench_udp_rx: list[bytes] = []      # ORKBENCH1 UDP 回显
         self._udp_ack_received = False
@@ -284,21 +261,20 @@ class OrkClientSession:
         self._udp_thread = threading.Thread(target=self._udp_loop, daemon=True)
         self._udp_thread.start()
 
-    # 兼容旧脚本名
-    start_udp_kcp = start_udp_rudp
-
     def send_udp_handshake(self) -> None:
         """发送 UDP Handshake V2（42B 认证帧）。
 
         同一 bootstrap 会话内 nonce 固定、counter 单调递增；counter 溢出
-        fail closed（须重建连接，不回绕）。
+        fail closed（须重建连接，不回绕）。handshakeKey 由 c2sKey 经
+        HKDF-SHA-256 派生（info label "ORK-UDP-HS-C2S-v2"），不复用数据通道密钥；
+        authTag 覆盖除自身外全部 26B 明文字段（Rev 3 §5.5/§5.6）。
         """
         assert self._udp_sock is not None
         if self._hs_client_nonce is None or not self._hs_c2s_key:
             raise RuntimeError("Handshake V2 状态缺失（bootstrap 未完成）")
         if not handshake_counter_can_advance(self._hs_counter):
             raise RuntimeError("handshake counter exhausted (fail closed; reconnect required)")
-        packet = wrap_udp_handshake(
+        packet = build_handshake_v2_packet(
             self.connection_id,
             self._hs_client_nonce,
             self._hs_counter,
@@ -397,8 +373,6 @@ class OrkClientSession:
         if parse_bench_payload(payload) is not None:
             self.stats.bench_udp_echoes += 1
             self._bench_udp_rx.append(payload)
-            return
-        self._udp_rx_payloads.append(payload)
 
     # -- KCP 通道收发 --------------------------------------------------------
     def pump_rudp(self) -> list[bytes]:
@@ -430,7 +404,6 @@ class OrkClientSession:
                 continue
             self.stats.rudp_received += 1
             out.append(payload)
-            self._rx_payloads.append(payload)
         return out
 
     @staticmethod
@@ -488,31 +461,24 @@ class OrkClientSession:
         payload = build_bench_payload(sequence, send_time_ns)
         return self.send_udp(payload)
 
-    def drain_bench_rudp(self) -> list[tuple[int, int]]:
-        """消费并返回 KCP 收到的 ORKBENCH1 回显 [(seq, send_time_ns), ...]。"""
+    @staticmethod
+    def _drain_bench(buf: list[bytes]) -> list[tuple[int, int]]:
+        """消费 buf 中的 ORKBENCH1 回显 → [(seq, send_time_ns), ...] 并清空。"""
         result = []
-        for raw in self._bench_rudp_rx:
+        for raw in buf:
             parsed = parse_bench_payload(raw)
             if parsed is not None:
                 result.append(parsed)
-        self._bench_rudp_rx.clear()
+        buf.clear()
         return result
+
+    def drain_bench_rudp(self) -> list[tuple[int, int]]:
+        """消费并返回 KCP 收到的 ORKBENCH1 回显 [(seq, send_time_ns), ...]。"""
+        return self._drain_bench(self._bench_rudp_rx)
 
     def drain_bench_udp(self) -> list[tuple[int, int]]:
         """消费并返回 UDP 收到的 ORKBENCH1 回显 [(seq, send_time_ns), ...]。"""
-        result = []
-        for raw in self._bench_udp_rx:
-            parsed = parse_bench_payload(raw)
-            if parsed is not None:
-                result.append(parsed)
-        self._bench_udp_rx.clear()
-        return result
-
-    def drain_udp_payloads(self) -> list[bytes]:
-        """消费并返回 UDP 通道收到的非 bench opaque 载荷。"""
-        out = list(self._udp_rx_payloads)
-        self._udp_rx_payloads.clear()
-        return out
+        return self._drain_bench(self._bench_udp_rx)
 
     # -- 关闭 ----------------------------------------------------------------
     def close(self) -> None:

@@ -6,30 +6,20 @@ AEAD 模式：所有上行 seal 加密、下行 open 解密 + 完整性校验。
 - 双通道 echo 均经真实解密 + Poly1305 校验通过（否则回显会被丢弃、计数为 0）
 - 用会话真实协商密钥做本地 seal→open 往返，且篡改密文被拒
 - 全程无 open/decrypt 失败错误
+
+依赖共享 `session` fixture（见 conftest.py）。
 """
 
 from __future__ import annotations
-
-import pytest
 
 from lib import ork_cipher as C
 from lib.demo_helpers import (
     RELIABLE_MARKER,
     UNRELIABLE_MARKER,
-    connect_verbose,
     echo_once_reliable,
     echo_once_unreliable,
     marker_int,
 )
-
-
-@pytest.fixture
-def session(server, host, port):
-    s = connect_verbose(host, port, "test-encryption", quiet=True)
-    try:
-        yield s
-    finally:
-        s.close()
 
 
 def test_encryption_negotiated(session):
@@ -56,35 +46,26 @@ def test_encrypted_unreliable_echo(session):
 def test_session_keys_seal_open_roundtrip(session):
     """用会话真实协商密钥做本地 AEAD 往返 + 篡改拒绝。"""
     keys = session.cipher
-    local = C.CipherState.from_keys(
-        connection_id=keys.connection_id,
-        session_token=keys.session_token,
-        c2s_key=keys.c2s_key,
-        s2c_key=keys.s2c_key,
-        encryption_required=True,
-    )
+
+    def _fresh_state() -> C.CipherState:
+        """每次构造独立的 CipherState（replay 保护要求 open 端 seq 严格递增，
+        故 seal / open / 篡改 open 各用一个全新状态，互不共享 replay 窗口）。"""
+        return C.CipherState.from_keys(
+            connection_id=keys.connection_id,
+            session_token=keys.session_token,
+            c2s_key=keys.c2s_key,
+            s2c_key=keys.s2c_key,
+            encryption_required=True,
+        )
+
     plaintext = b"ORK-AEAD-SELFTEST-PAYLOAD"
-    frame = C.seal(local, C.CHANNEL_RUDP, C.C2S, 5, plaintext)
+    frame = C.seal(_fresh_state(), C.CHANNEL_RUDP, C.C2S, 5, plaintext)
     assert frame is not None
     assert frame[0] == C.CIPHER_VERSION
     assert frame[C.FRAME_HEADER_SIZE:] != plaintext  # 确已加密（非明文透传）
 
-    rx = C.CipherState.from_keys(
-        connection_id=keys.connection_id,
-        session_token=keys.session_token,
-        c2s_key=keys.c2s_key,
-        s2c_key=keys.s2c_key,
-        encryption_required=True,
-    )
-    assert C.open_frame(rx, C.CHANNEL_RUDP, C.C2S, 0, frame) == plaintext
+    assert C.open_frame(_fresh_state(), C.CHANNEL_RUDP, C.C2S, 0, frame) == plaintext
 
     tampered = bytearray(frame)
     tampered[-1] ^= 0xFF
-    rx2 = C.CipherState.from_keys(
-        connection_id=keys.connection_id,
-        session_token=keys.session_token,
-        c2s_key=keys.c2s_key,
-        s2c_key=keys.s2c_key,
-        encryption_required=True,
-    )
-    assert C.open_frame(rx2, C.CHANNEL_RUDP, C.C2S, 0, bytes(tampered)) is None
+    assert C.open_frame(_fresh_state(), C.CHANNEL_RUDP, C.C2S, 0, bytes(tampered)) is None
