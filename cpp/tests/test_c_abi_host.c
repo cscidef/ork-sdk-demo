@@ -23,6 +23,7 @@
 #include "demo_support_c.h"
 
 #include <stdio.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -36,10 +37,10 @@
 /* -------------------------------------------------------------------------- */
 /* 回调：本测试不建连接，理论上不会被触发；一旦被触发就记录下来当失败信号       */
 /* -------------------------------------------------------------------------- */
-static volatile uint32_t g_cb_connected    = 0;
-static volatile uint32_t g_cb_disconnected = 0;
-static volatile uint32_t g_cb_payload      = 0;
-static volatile uint32_t g_cb_stats        = 0;
+static _Atomic uint32_t g_cb_connected    = 0;
+static _Atomic uint32_t g_cb_disconnected = 0;
+static _Atomic uint32_t g_cb_payload      = 0;
+static _Atomic uint32_t g_cb_stats        = 0;
 
 static void cb_connected(void* user, uint32_t connection_id)
 {
