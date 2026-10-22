@@ -1,0 +1,6 @@
+__pycache__/
+results/
+reports/*.md
+!reports/.gitkeep
+stress_config.yaml
+package_server/.run/

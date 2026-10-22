@@ -1,0 +1,40 @@
+run:
+  id: "stress_500_24h_v1"
+  duration_hours: 24
+  stats_interval_sec: 60
+
+server:
+  host: <SERVER_HOST>
+  port: 37564
+  config_overrides:             # 由 package_server/run.sh 自动读取并注入运行时配置副本
+    room.max_players: 600
+    network.bootstrap_ttl_sec: 172800
+    log.level: Warn
+
+nodes:
+  - name: lnx140
+    host: <NODE_1_HOST>
+    ssh_user: root
+    workers: 5
+    clients_per_worker: 50
+    work_dir: ~/ork-sdk-demo
+  - name: lnx96
+    host: <NODE_2_HOST>
+    ssh_user: root
+    workers: 5
+    clients_per_worker: 50
+    work_dir: ~/ork-sdk-demo
+
+workload:
+  pose_hz: 50
+  reliable_hz: 5
+  batch_hz: 10
+  ack_hz: 10
+  bone_count: 17
+  batch_entities: 12
+  connect_stagger_ms: 100
+  join_timeout_sec: 30
+
+monitoring:
+  port: 39000
+  dashboard_refresh_sec: 5
