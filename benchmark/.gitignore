@@ -1,0 +1,7 @@
+__pycache__/
+bin/
+results/
+reports/*.md
+!reports/.gitkeep
+!reports/latest.md
+!reports/sla_baseline.md
