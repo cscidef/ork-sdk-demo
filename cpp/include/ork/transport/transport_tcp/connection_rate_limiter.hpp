@@ -32,8 +32,8 @@
 #include <unordered_map>
 
 // asio 依赖隔离：本头会进入 SDK 公共头链（session_interface.hpp →
-// TransportConfig::connectionProtection），必须保持 asio-free（sdk_demo
-// 等纯 Mock 接入不含 asio include 路径）。asio::ip::address 为非模板类，
+// TransportConfig::connectionProtection），必须保持 asio-free（纯 Mock
+// 接入不含 asio include 路径）。asio::ip::address 为非模板类，
 // 此处前向声明即可；完整定义仅 .cpp 需要。
 namespace asio {
 namespace ip {

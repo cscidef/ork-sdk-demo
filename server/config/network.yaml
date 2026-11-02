@@ -1,40 +1,153 @@
-# Ork SDK Demo - Network Configuration
-# Mode: plaintext_dev (loopback only, no TLS required)
-# WARNING: This configuration is for local demo/testing ONLY.
-# Production deployments MUST use bootstrap_security: tls
-
+# 传输层网络参数（ServerApp::Start → ConfigManager::Network() 加载）
+# 详见 source/core/platform/include/ork/platform/config/network_config.hpp
 network:
-  game_port: 9400
-
-  # Transport
-  enable_kcp: true
-  kcp_update_rate: 100
-  pump_rate: 30
+  # 共享单包 payload 上限（字节），同时作为 ikcp_setmtu 的 MTU 参数
+  # 与 Reliable/Unreliable 两通道的应用 payload 上限。
+  # 有效范围 [50, 1414]；默认 1200。
+  #
+  # 下限 50：ikcp.c ikcp_setmtu 硬约束（mtu < 50 → return -1）。
+  # 上限 1414：两通道无 IPv6 分片边界中更严格者（Unreliable 加密最坏）：
+  #   Unreliable wire = 48(IPv6+UDP) + 7(UdpDataHeader) + 15(OrkFrame header)
+  #                     + 16(AEAD tag) + payload = 86 + payload ≤ 1500
+  #   → payload ≤ 1414
+  #   Reliable 单通道理论上限 1452（48 + mtu ≤ 1500；ikcp_setmtu 的 mtu 已是
+  #   output 上限、含 24B KCP header，不双算），但共享配置不得取 [1415, 1452]——
+  #   该区间会令 Unreliable 加密最坏 wire 超过 1500 触发 IPv6 分片。
+  #   未加密仅少 16B AEAD tag，校验按加密最坏情况进行。
+  #
+  # 注：payload 靠近上限时，OrkFrame + AEAD 开销会使 KCP 分片为多个 segment，
+  # 每个 segment datagram 仍不超 1500B；不承诺单 datagram 传输。
   max_packet_size: 1200
 
-  # Encryption (cipher layer, independent of bootstrap security)
+  # 是否在 Bootstrap 成功后对 KCP/UDP 载荷做 OrkCipher AEAD 加密。
+  # true  → TCP AssignConnection 下发 key，KCP/UDP 走 OrkCipherFrame
+  # false → 明文联调，Seal/Open 原样透传 Protobuf 字节（阶段 1）
   enable_encryption: true
+
+  # AEAD 会话 key 有效期（秒）；仅 enable_encryption=true 时生效，过期后 Open 拒绝。
   bootstrap_ttl_sec: 300
+
+  # 加解密调试日志开关（生产环境请保持 false）。
+  # false → 不输出 OrkCipher 调试信息（默认）
+  # true  → 且该连接 enable_encryption=true 时，Seal/Open 向 Logger 写 Debug 级别日志：
+  #         成功：conn/ch/seq/长度等帧元数据（不输出 token、密钥或载荷/帧 hex）
+  #         失败：[OrkCipher:Seal|Open] FAIL … 及原因（AEAD/重放/过期等），不含帧字节
+  # 要看到输出须同时满足：本项 true + config/log.yaml level 含 Debug（如 Debug/Trace）
   cipher_debug_log: false
 
-  # Connection management
-  connection_idle_timeout_sec: 300
-  max_connections: 64
+  # ===== Phase 4.1：KCP 协议参数 =====
+  # 默认值严格等于 Phase 2 硬编码（kcp_session.cpp 历史值）。
+  # 修改前请阅读 KCP 文档；错误的参数可能导致重传风暴或吞吐量下降。
 
-  # Bootstrap security
+  # nodelay 模式：0=关闭（默认TCP风格），1=无延迟，2=最快（RTO x1.5 退避）。
+  # 推荐 2（线下赛事/WiFi），降低约 15% 重传延迟。
+  kcp_nodelay: 2
+
+  # KCP 内部 flush 间隔（ms）。推荐 10ms（100Hz 采样，匹配 50Hz 游戏帧的 2 倍过采样）。
+  kcp_interval_ms: 10
+
+  # 快速重传阈值：跳过 N 个 ACK 即触发重传。推荐 2（丢包率 <5% 的局域网/WiFi）。
+  # 0 = 关闭快速重传（仅依赖超时重传）。
+  kcp_fast_resend: 2
+
+  # 是否关闭拥塞控制。true=关闭（游戏标准做法，带宽由应用层管理）。
+  kcp_no_congestion: true
+
+  # 发送/接收窗口大小（段数）。推荐 128（高频小包 50Hz 位姿场景）。
+  # 接收窗口必须 >= 发送窗口，否则对端被限流。
+  kcp_send_window: 128
+  kcp_receive_window: 128
+
+  # 流模式：当前版本必须为 false（OrkFrame 帧定界不支持流模式）。
+  # true 会被 Validate() 拒绝并在 KcpSession 构造中强制覆盖为 0。
+  kcp_stream_mode: false
+
+  # 最小 RTO（ms）。默认 10ms（局域网 RTT<5ms 场景）；KCP 原始默认 30ms。
+  # 不建议设为 0（会导致无意义重传）。公网场景建议 30–100ms。
+  kcp_rx_min_rto_ms: 10
+
+  # ===== Phase 4.4：UDP socket 内核缓冲区 =====
+  # UDP socket 缓冲区大小（字节），0 表示沿用 OS 默认（不显式 setsockopt）。
+  # 高频小包 / 突发场景可调大接收缓冲以降低内核丢包；请求值可能被 OS clamp，
+  # 启动日志会打印 requested 与 actual 实际生效值（grep "UDP socket buffers"）。
+  # 调大前请确认 OS 上限（Linux: sysctl net.core.rmem_max / wmem_max）。
+  udp_receive_buffer_bytes: 0
+  udp_send_buffer_bytes: 0
+
+  # ===== Phase 4.5：连接空闲超时 =====
+  # 连接空闲超时（秒），超时后自动断开（DisconnectReason::IdleTimeout）。0 表示禁用空闲检测。
+  # 由 TransportConfig::connectionIdleTimeoutSec 消费，examples 不再硬编码。
+  connection_idle_timeout_sec: 300
+
+  # ===== A0.3：Bootstrap 资源保护（连接接纳门禁） =====
+  # BootstrapSecurityDesign 第八章：TCP accept 门禁在 accept 完成回调内判定，
+  # 拒绝时静默关闭 socket（不分配 connectionId/sessionToken，不回包不写日志），
+  # 仅聚合指标计数（Metrics: conn_rejected_* / tcp_*）。
+  # 判定顺序：总并发 → 未完成 Bootstrap 上限 → 每 IP 速率 → 全局速率。
+
+  # TCP 活跃连接（含未完成 Bootstrap）总上限。默认 2048。
+  tcp_max_active_connections: 2048
+
+  # 未完成 Bootstrap（TcpOnly，未完成 UDP 绑定）连接上限。默认 256。
+  # 须满足 0 < 该值 <= tcp_max_active_connections。
+  tcp_max_pending_bootstrap: 256
+
+  # 每 IP 新连接 token bucket：burst 容量（瞬时）。默认 20。
+  per_ip_new_conn_burst: 20
+
+  # 每 IP 持续补充速率（新连接数/分钟）。默认 60。
+  # 注意：公网部署若所有客户端经同一 NAT 出口，需按实际并发调大；
+  # 线下赛事局域网直连（每客户端独立 IP）默认值即可。
+  per_ip_new_conn_rate_per_min: 60
+
+  # 全局新连接 token bucket：burst 容量（瞬时）。默认 100。
+  # 依据：覆盖服务器重启后 ≤100 客户端瞬时重连（线下赛事 8 人房 × 12 房 ≈ 96）。
+  global_new_conn_burst: 100
+
+  # 全局持续补充速率（新连接数/分钟）。默认 600（=10/s）。
+  # 依据：per-IP 默认 60/min 的 10 倍，不阻碍真实多用户接入；同时 10/s
+  # 远低于 accept 消化能力与 TcpOnly 队列（默认 256）回收速率，足以挡住
+  # 把未完成 Bootstrap 队列瞬间打满的连接洪泛。
+  global_new_conn_rate_per_min: 600
+
+  # TcpOnly（未完成 Bootstrap）停留超时（秒），超时后回收断开。默认 30。
+  # 独立于 connection_idle_timeout_sec；0 表示禁用。超限回收不采用“腾挪
+  # 最早连接”策略：新连接由门禁拒绝，存量由本超时 + HostPump 定期清理。
+  tcp_only_timeout_sec: 30
+
+  # ===== A1.1：Bootstrap 通道安全（TLS 1.3 / 明文开发模式） =====
+  # BootstrapSecurityDesign Rev 3 第七章：生产默认 TlsServerAuthenticated；
+  # 无 TLS 失败后的明文回退；0-RTT early data 固定禁用（不可配置）。
+  #
+  # 可选值：
+  #   tls            — TLS 1.3（服务端证书认证；生产默认，也是二进制默认）
+  #   plaintext_dev  — 明文开发模式（仅本地）
+  #
+  # plaintext_dev 约束（全部硬性）：
+  #   1. 仅 ORK_ALLOW_PLAINTEXT_BOOTSTRAP=ON 构建编入（默认 OFF，生产构建
+  #      物理不存在明文路径）；OFF 构建下本配置会被 Validate 拒绝（fail closed）。
+  #   2. 服务端明文监听硬绑定 loopback，客户端连接目标必须 loopback。
+  #
+  # 本仓库默认活动配置为 plaintext_dev：供本地开发 / demo 验证（与
+  # ORK_ALLOW_PLAINTEXT_BOOTSTRAP=ON 的本地构建配套）。生产部署改为 tls
+  # 并配置下方证书字段，例如：
+  #
+  #   bootstrap_security: tls
+  #   tls_certificate_file: /etc/ork/tls/server-fullchain.pem
+  #   tls_private_key_file: /etc/ork/tls/server-key.pem
+  #   tls_handshake_timeout_ms: 5000
   bootstrap_security: plaintext_dev
 
-  # KCP tuning
-  kcp:
-    nodelay: 2
-    interval: 10
-    fast_resend: 2
-    no_congestion: true
-    sndwnd: 128
-    rcvwnd: 128
-    stream_mode: false
-    rx_min_rto: 10
+  # TLS 模式：PEM 证书链文件路径（leaf 在前，含中间链）。
+  # bootstrap_security=tls 时必填，缺失 fail closed（拒绝启动）。
+  tls_certificate_file: ""
 
-  # UDP buffers
-  udp_receive_buffer_bytes: 4194304
-  udp_send_buffer_bytes: 4194304
+  # TLS 模式：PEM 私钥文件路径。必填；加载前 POSIX 权限检查
+  # （owner-only：普通文件、属主为当前用户、无 group/other 位，
+  # 即 0600/0400），不合规 fail closed。依赖系统时间验证证书有效期
+  # （不自建 NTP；需保证宿主机时钟可信）。
+  tls_private_key_file: ""
+
+  # TLS 握手超时（ms），超时即断开并释放 A0.3 槽位（pendingTls 计入
+  # 未完成 Bootstrap 预算，不绕过接纳门禁）。默认 5000。
+  tls_handshake_timeout_ms: 5000

@@ -33,6 +33,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "ork_export.h"  /* OrkExport：跨平台符号可见性（W1.1） */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -307,18 +309,18 @@ typedef struct OrkHost_s* OrkHost;
  * @param out_host   [out] 成功时写入句柄
  * @return OrkOk 或错误码（失败详情见 ork_last_error()）
  */
-OrkError ork_host_create(const OrkHostConfig* config,
-                         const OrkHostCallbacks* callbacks,
-                         OrkHost* out_host);
+OrkExport OrkError ork_host_create(const OrkHostConfig* config,
+                                   const OrkHostCallbacks* callbacks,
+                                   OrkHost* out_host);
 
 /** @brief 启动宿主（开始监听 + 内部 pump 线程）。重复启动返回 OrkErr_AlreadyStarted。 */
-OrkError ork_host_start(OrkHost host);
+OrkExport OrkError ork_host_start(OrkHost host);
 
 /** @brief 停止宿主（阻塞等待内部 pump 线程退出）。未启动返回 OrkErr_NotStarted。 */
-OrkError ork_host_stop(OrkHost host);
+OrkExport OrkError ork_host_stop(OrkHost host);
 
 /** @brief 销毁宿主实例（若仍运行会先 Stop）。传 NULL 安全无操作。 */
-void ork_host_destroy(OrkHost host);
+OrkExport void ork_host_destroy(OrkHost host);
 
 /* ---- 驱动（drive_mode=1 时由调用方周期调用） ---- */
 
@@ -331,7 +333,7 @@ void ork_host_destroy(OrkHost host);
  *
  * @return OrkOk；host 为空返回 OrkErr_InvalidArg；未启动返回 OrkErr_NotStarted。
  */
-OrkError ork_host_pump_once(OrkHost host);
+OrkExport OrkError ork_host_pump_once(OrkHost host);
 
 /* ---- 发送 ---- */
 
@@ -340,32 +342,33 @@ OrkError ork_host_pump_once(OrkHost host);
  * @param data  size>0 时不可为 NULL；返回后调用方可立即释放
  * @return OrkSendResult
  */
-OrkSendResult ork_host_send(OrkHost host, uint32_t connection_id,
-                            const uint8_t* data, uint32_t size, OrkChannel channel);
+OrkExport OrkSendResult ork_host_send(OrkHost host, uint32_t connection_id,
+                                      const uint8_t* data, uint32_t size, OrkChannel channel);
 
 /**
  * @brief 向所有活跃连接广播 opaque 字节。
  * @return OrkSendResult（无连接时视为 vacuous 成功 OrkSend_Ok）
  */
-OrkSendResult ork_host_broadcast(OrkHost host,
-                                 const uint8_t* data, uint32_t size, OrkChannel channel);
+OrkExport OrkSendResult ork_host_broadcast(OrkHost host,
+                                           const uint8_t* data, uint32_t size, OrkChannel channel);
 
 /* ---- 连接管理 ---- */
 
 /** @brief 主动断开指定连接（可在回调内调用）。连接不存在/已断开返回 OrkErr_BadState。 */
-OrkError ork_host_disconnect(OrkHost host, uint32_t connection_id, OrkDisconnectReason reason);
+OrkExport OrkError ork_host_disconnect(OrkHost host, uint32_t connection_id,
+                                       OrkDisconnectReason reason);
 
 /** @brief 当前活跃连接数。host 为空返回 0。 */
-uint32_t ork_host_connection_count(OrkHost host);
+OrkExport uint32_t ork_host_connection_count(OrkHost host);
 
 /** @brief 查询单条连接信息。连接不存在返回 OrkErr_BadState。 */
-OrkError ork_host_get_connection_info(OrkHost host, uint32_t connection_id,
-                                      OrkConnectionInfo* out_info);
+OrkExport OrkError ork_host_get_connection_info(OrkHost host, uint32_t connection_id,
+                                                OrkConnectionInfo* out_info);
 
 /* ---- 统计 ---- */
 
 /** @brief 获取最近一次统计快照（~1Hz 缓存，最多约 1s 陈旧）。 */
-OrkError ork_host_get_stats(OrkHost host, OrkStats* out_stats);
+OrkExport OrkError ork_host_get_stats(OrkHost host, OrkStats* out_stats);
 
 /* ---- 错误 ---- */
 
@@ -374,12 +377,12 @@ OrkError ork_host_get_stats(OrkHost host, OrkStats* out_stats);
  *
  * 返回指针在**本线程**下一次 ork_* 调用前有效。无错误时返回空串 ""。
  */
-const char* ork_last_error(void);
+OrkExport const char* ork_last_error(void);
 
 /* ---- ABI 版本 ---- */
 
 /** @brief 返回 ABI 版本号（= ORK_ABI_VERSION，当前为 1）。 */
-uint32_t ork_abi_version(void);
+OrkExport uint32_t ork_abi_version(void);
 
 #ifdef __cplusplus
 } /* extern "C" */

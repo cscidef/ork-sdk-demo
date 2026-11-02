@@ -1,4 +1,13 @@
-server:
-  name: "ork-demo-server"
-  log_level: info
-  log_file: ""
+env: dev
+
+# 配置文件包含清单（Phase 4.5：配置权威化）。
+# ConfigManager::Load 先读本文件，按 includes 顺序相对 config 根目录解析并加载各配置；
+# 不再硬编码文件名列表。安全校验：拒绝目录穿越(..)、绝对路径、重复项、非 .yaml、缺失文件。
+# 若本文件缺失或无 includes 字段：ConfigManager 打印 WARN 并回退到默认清单
+# （network/room/sync/log/metrics 五份）。
+includes:
+  - network.yaml
+  - room.yaml
+  - sync.yaml
+  - log.yaml
+  - metrics.yaml

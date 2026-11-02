@@ -46,6 +46,7 @@
 #include <stddef.h>
 
 #include "ork/sdk/c/ork_abi.h"  /* 复用 OrkError / OrkSendResult / OrkChannel / OrkDisconnectReason */
+#include "ork_export.h"          /* OrkExport：跨平台符号可见性（W1.1） */
 
 #ifdef __cplusplus
 extern "C" {
@@ -249,9 +250,9 @@ typedef struct OrkClient_s* OrkClientHandle;
  * create 仅校验字段值本身（枚举范围 / 三态范围）与构建能力
  * （PlaintextDev 未编入即拒绝）。
  */
-OrkError ork_client_create(const OrkClientConfig* config,
-                           const OrkClientCallbacks* callbacks,
-                           OrkClientHandle* out_client);
+OrkExport OrkError ork_client_create(const OrkClientConfig* config,
+                                     const OrkClientCallbacks* callbacks,
+                                     OrkClientHandle* out_client);
 
 /**
  * @brief 发起连接（异步；需周期调用 ork_client_pump_once() 驱动推进）。
@@ -259,7 +260,7 @@ OrkError ork_client_create(const OrkClientConfig* config,
  * 重复调用（非 Disconnected 状态，或上一次 connect 尚被 pump 消费前）
  * 返回 OrkErr_AlreadyStarted。断开后可再次 connect（重连）。
  */
-OrkError ork_client_connect(OrkClientHandle client);
+OrkExport OrkError ork_client_connect(OrkClientHandle client);
 
 /**
  * @brief 主动断开（幂等：已断开时为 no-op 成功）。
@@ -267,7 +268,7 @@ OrkError ork_client_connect(OrkClientHandle client);
  * 可在回调内安全调用。手动驱动模式下 OnDisconnected 回调可能在本调用
  * 栈内同步触发（reason 为 OrkDisconnectReason 枚举值）。
  */
-OrkError ork_client_disconnect(OrkClientHandle client);
+OrkExport OrkError ork_client_disconnect(OrkClientHandle client);
 
 /**
  * @brief 销毁客户端实例（若仍在连接中会先断开；断开引发的 OnDisconnected
@@ -275,7 +276,7 @@ OrkError ork_client_disconnect(OrkClientHandle client);
  *
  * 禁止在回调内调用（会析构自身 → 未定义行为）；请先投递到主循环线程。
  */
-void ork_client_destroy(OrkClientHandle client);
+OrkExport void ork_client_destroy(OrkClientHandle client);
 
 /* ---- 驱动 ---- */
 
@@ -287,7 +288,7 @@ void ork_client_destroy(OrkClientHandle client);
  *
  * @return OrkOk；client 为空返回 OrkErr_InvalidArg。
  */
-OrkError ork_client_pump_once(OrkClientHandle client);
+OrkExport OrkError ork_client_pump_once(OrkClientHandle client);
 
 /* ---- 发送 ---- */
 
@@ -296,16 +297,16 @@ OrkError ork_client_pump_once(OrkClientHandle client);
  * @param data  size>0 时不可为 NULL；返回后调用方可立即释放
  * @return OrkSendResult（未 Connected → OrkSend_NotConnected）
  */
-OrkSendResult ork_client_send(OrkClientHandle client,
-                              const uint8_t* data, uint32_t size, OrkChannel channel);
+OrkExport OrkSendResult ork_client_send(OrkClientHandle client,
+                                        const uint8_t* data, uint32_t size, OrkChannel channel);
 
 /* ---- 状态查询 ---- */
 
 /** @brief 当前连接状态。client 为空返回 OrkClientState_Disconnected。 */
-OrkClientState ork_client_get_state(OrkClientHandle client);
+OrkExport OrkClientState ork_client_get_state(OrkClientHandle client);
 
 /** @brief 当前连接 ID（Bootstrap 前为 0）。client 为空返回 0。 */
-uint32_t ork_client_get_connection_id(OrkClientHandle client);
+OrkExport uint32_t ork_client_get_connection_id(OrkClientHandle client);
 
 /* ---- 错误 ---- */
 
@@ -316,7 +317,7 @@ uint32_t ork_client_get_connection_id(OrkClientHandle client);
  * 单元，内部缓冲无法合并）；返回指针在**本线程**下一次 ork_client_* 调用前
  * 有效。无错误时返回空串 ""。
  */
-const char* ork_client_last_error(void);
+OrkExport const char* ork_client_last_error(void);
 
 #ifdef __cplusplus
 } /* extern "C" */

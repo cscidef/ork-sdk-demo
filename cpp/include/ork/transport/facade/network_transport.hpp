@@ -115,10 +115,6 @@ public:
 
     // ===== 发送（Phase 4.2: strand 桥接） =====
 
-    /// 发送 opaque 字节（同步返回 SendResult）
-    ork::platform::SendResult Send(ConnectionId conn, uint32_t packetType,
-                                   std::span<const uint8_t> payload, TransportChannel channel);
-
     /// TrySend（同步返回 SendResult）
     ork::platform::SendResult TrySend(ConnectionId conn, uint32_t packetType,
                                       std::span<const uint8_t> payload, TransportChannel channel);
