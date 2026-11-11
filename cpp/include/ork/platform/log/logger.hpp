@@ -1,9 +1,38 @@
 #pragma once
 #include "ork/platform/log/log_level.hpp"
+#include <cstdint>
 #include <fmt/format.h>
 #include <memory>
-#include <source_location>
 #include <string>
+
+// ── source_location 兼容层 ──
+// Android NDK r23b 的 libc++（LLVM 12）尚未提供 <source_location>（该头
+// 自 libc++ 16 才完整实现）。此处按能力探测：有则直接用标准类型，没有
+// 则退化为零开销占位类型，日志照常输出、仅不再携带文件/行号。
+// 该降级不影响 C ABI 与传输语义，仅影响日志定位信息。
+#if defined(__has_include)
+#  if __has_include(<source_location>)
+#    include <source_location>
+#    define ORK_HAS_STD_SOURCE_LOCATION 1
+#  endif
+#endif
+#ifndef ORK_HAS_STD_SOURCE_LOCATION
+#  define ORK_HAS_STD_SOURCE_LOCATION 0
+#endif
+
+#if ORK_HAS_STD_SOURCE_LOCATION
+using OrkSourceLocation = std::source_location;
+#else
+class OrkSourceLocation
+{
+public:
+    static constexpr OrkSourceLocation current() noexcept { return {}; }
+    constexpr const char* file_name() const noexcept { return ""; }
+    constexpr const char* function_name() const noexcept { return ""; }
+    constexpr std::uint_least32_t line() const noexcept { return 0; }
+    constexpr std::uint_least32_t column() const noexcept { return 0; }
+};
+#endif
 
 class Logger
 {
@@ -50,17 +79,17 @@ public:
 
     // ── string overload（兼容非热路径 / 启动停止日志） ──
 
-    void Trace(const std::string& msg, const std::source_location& loc = std::source_location::current());
-    void Debug(const std::string& msg, const std::source_location& loc = std::source_location::current());
-    void Info(const std::string& msg, const std::source_location& loc = std::source_location::current());
-    void Warn(const std::string& msg, const std::source_location& loc = std::source_location::current());
-    void Error(const std::string& msg, const std::source_location& loc = std::source_location::current());
-    void Critical(const std::string& msg, const std::source_location& loc = std::source_location::current());
+    void Trace(const std::string& msg, const OrkSourceLocation& loc = OrkSourceLocation::current());
+    void Debug(const std::string& msg, const OrkSourceLocation& loc = OrkSourceLocation::current());
+    void Info(const std::string& msg, const OrkSourceLocation& loc = OrkSourceLocation::current());
+    void Warn(const std::string& msg, const OrkSourceLocation& loc = OrkSourceLocation::current());
+    void Error(const std::string& msg, const OrkSourceLocation& loc = OrkSourceLocation::current());
+    void Critical(const std::string& msg, const OrkSourceLocation& loc = OrkSourceLocation::current());
 
 private:
     Logger() = default;
 
-    void Log(LogLevel level, const std::string& msg, const std::source_location& loc);
+    void Log(LogLevel level, const std::string& msg, const OrkSourceLocation& loc);
     void LogDirect(LogLevel level, const std::string& msg);
 
 private:
