@@ -110,6 +110,20 @@ configure 阶段应该看到这几行（用来确认选对了形态）：
 
 ---
 
+## 后续：第三方头还没进 payload（待办，2026-11-11 记录）
+
+现状是「实现齐了，头没齐」：合并包里 OpenSSL 与 libsodium 的实现已经并进
+`ork_static.lib`，所以 **C ABI 消费者零外部依赖**，不需要 vcpkg、也不需要本地 SSL。
+但 C++ 这一层还差 OpenSSL 的**头文件**（公共头 `#include <asio/ssl.hpp>`），所以本
+README 仍然要求 `-DOPENSSL_ROOT_DIR` 或 vcpkg toolchain。
+
+计划（排在 Windows 静态包第一次实机跑通之后）：把 `thirdparty/include/` 和
+`include/ork/` 的 C++ 头一起打进 payload，打包器从实际参与编译的 include 目录拷并
+把版本写进 `manifest.json`，头必须与归档内实现同源同版本。做完之后工程师就彻底不用
+碰 vcpkg 了。决策记录见 `harmonia_ork/doc/OrkDeliveryFormPlan.md` §7.2。
+
+---
+
 ## 常见错误
 
 - `LNK2019` / `LNK4217` 一片 → `ORK_STATIC` 没生效。`FindOrk.cmake` 已经自动加了，
