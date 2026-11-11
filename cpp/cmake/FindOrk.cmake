@@ -217,6 +217,12 @@ if(APPLE)
         /opt/homebrew/opt/libsodium/include /opt/homebrew/opt/libsodium/lib
         /usr/local/opt/libsodium/include /usr/local/opt/libsodium/lib)
 endif()
+# libsodium is not vendored, and on Windows there is no pkg-config and no
+# conventional install prefix to fall back on — a bare 'sodium.lib' sitting next
+# to the Ork archives is the most common layout. Adding the triplet directory as
+# a hint makes that work without -DSODIUM_ROOT; on macOS/Linux it is simply an
+# extra (usually empty of sodium) probe path and changes nothing.
+list(APPEND _ork_sodium_hints "${ORK_LIBRARY_DIR}")
 
 find_path(SODIUM_INCLUDE_DIR
     NAMES sodium.h

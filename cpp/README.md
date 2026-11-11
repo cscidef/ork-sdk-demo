@@ -224,6 +224,14 @@ ORK_LOG_LEVEL=trace|debug|info|warn|error|off   # 默认 warn
 * **MSVC 运行时必须是 `/MD`（默认）**。Ork 归档用 `/MD` 编译，消费方若改 `/MT`
   会在链接期撞 `LNK2038: RuntimeLibrary 不匹配`。`CMakeLists.txt` 只对 Ork 自身
   强制了 `CMAKE_MSVC_RUNTIME_LIBRARY`，下游工程若自己覆盖了该变量，需要保持同值。
+* **Windows 上 libsodium 与 OpenSSL 不在 SDK payload 里，必须另外提供**。这两个
+  是外部依赖（与 macOS 从 Homebrew 取同理）：
+  - libsodium：`sodium.lib`，可放在 `lib/windows-x64/` 里直接生效（`FindOrk.cmake`
+    会把该目录作为 hint），或传 `-DSODIUM_ROOT=<prefix>`；
+  - OpenSSL ≥ 3：`libssl.lib` / `libcrypto.lib` + 头文件，传
+    `-DOPENSSL_ROOT_DIR=<prefix>`（该目录下需有 `include/openssl/ssl.h` 与 `lib/`）。
+    用 vcpkg 的话 `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake`
+    可以一次性带出两者，vcpkg 的 triplet 要选 `x64-windows-static-md` 以对齐 `/MD`。
 * **C ABI Host 恒定使用 `PlaintextDevelopment` bootstrap**，因此 SDK 会把监听
   地址强制收敛到 loopback。生产环境请用 C++ SDK（demo 03）配
   `TlsServerAuthenticated` + TLS 1.3 证书链 / 私钥。
