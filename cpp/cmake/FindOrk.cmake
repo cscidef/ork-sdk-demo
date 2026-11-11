@@ -114,48 +114,110 @@ endif()
 #    with one clear message instead of at link time with a wall of undefined
 #    symbols.
 # ---------------------------------------------------------------------------
-set(ORK_LIB_NAMES ork_core ork_platform kcp fmt yaml-cpp)
+# ---------------------------------------------------------------------------
+# 3a. Payload form — merged archive (delivery) vs split archives (development).
+#
+#     The packaged SDK (dist/macos/lib/libork_static.a,
+#     dist/windows/lib/ork_static.lib) is a SINGLE merged archive holding the
+#     Ork core plus every vendored static dependency. Its member set is equal
+#     to the five split archives below; only the number of files differs.
+#
+#     The merged form is therefore probed first. When it is present we link
+#     that one archive and skip split probing entirely, so lib/<triplet>/ can
+#     hold an unpacked delivery package — which is the whole point of testing
+#     what actually ships, rather than a locally exported build tree.
+# ---------------------------------------------------------------------------
+if(WIN32)
+    set(_ork_merged_candidates
+        "${ORK_LIBRARY_DIR}/ork_static.lib"
+        "${ORK_LIBRARY_DIR}/libork_static.a")
+else()
+    set(_ork_merged_candidates
+        "${ORK_LIBRARY_DIR}/libork_static.a"
+        "${ORK_LIBRARY_DIR}/ork_static.lib")
+endif()
 
-foreach(_name IN LISTS ORK_LIB_NAMES)
-    if(WIN32)
-        set(_ork_candidates
-            "${ORK_LIBRARY_DIR}/${_name}.lib"
-            "${ORK_LIBRARY_DIR}/lib${_name}.a")
-    else()
-        set(_ork_candidates
-            "${ORK_LIBRARY_DIR}/lib${_name}.a"
-            "${ORK_LIBRARY_DIR}/${_name}.lib")
+set(ORK_MERGED_ARCHIVE "")
+foreach(_candidate IN LISTS _ork_merged_candidates)
+    if(EXISTS "${_candidate}")
+        set(ORK_MERGED_ARCHIVE "${_candidate}")
+        break()
     endif()
-
-    set(_ork_resolved "")
-    foreach(_candidate IN LISTS _ork_candidates)
-        if(EXISTS "${_candidate}")
-            set(_ork_resolved "${_candidate}")
-            break()
-        endif()
-    endforeach()
-
-    if(_ork_resolved STREQUAL "")
-        set(ORK_FOUND FALSE)
-        if(Ork_FIND_REQUIRED)
-            message(FATAL_ERROR
-                "Missing Ork static library '${_name}' in:\n"
-                "  ${ORK_LIBRARY_DIR}\n"
-                "Looked for any of:\n"
-                "  ${_ork_candidates}\n"
-                "Re-pack the SDK for '${ORK_PLATFORM}' (see cpp/README.md).")
-        endif()
-        return()
-    endif()
-
-    # yaml-cpp → ORK_LIB_YAML_CPP_PATH
-    string(TOUPPER "${_name}" _ork_upper)
-    string(REPLACE "-" "_" _ork_upper "${_ork_upper}")
-    set(ORK_LIB_${_ork_upper}_PATH "${_ork_resolved}")
 endforeach()
 
-set(ORK_CORE_LIBRARY     "${ORK_LIB_ORK_CORE_PATH}")
-set(ORK_PLATFORM_LIBRARY "${ORK_LIB_ORK_PLATFORM_PATH}")
+if(ORK_MERGED_ARCHIVE)
+    set(ORK_PAYLOAD_FORM "merged")
+else()
+    set(ORK_PAYLOAD_FORM "split")
+endif()
+
+# ---------------------------------------------------------------------------
+# 3b. Split archives (development layout) — skipped when 3a matched.
+#
+#     ork_core      — crypto/connection/transport/codec/sdk/client aggregate
+#     ork_platform  — config / logging / time / secure random (leaf library)
+#     kcp, fmt, yaml-cpp — third-party pieces compiled as static archives
+#     (asio, spdlog and concurrentqueue are header-only → nothing to link)
+#
+#     Naming is platform-dependent, so each library is probed in both forms and
+#     the platform-preferred one wins:
+#         MSVC / Windows  → <name>.lib        (ork_core.lib, yaml-cpp.lib, ...)
+#         macOS / Linux   → lib<name>.a       (libork_core.a, libyaml-cpp.a, ...)
+#     Probing both means one lib/<triplet>/ directory can hold either flavour,
+#     and a MinGW build on Windows still finds the GNU archives.
+#
+#     This loop resolves AND validates. The actual link line is assembled on
+#     Ork::Core / Ork::Platform in section 9, so a half-unpacked SDK fails here
+#     with one clear message instead of at link time with a wall of undefined
+#     symbols.
+# ---------------------------------------------------------------------------
+if(NOT ORK_MERGED_ARCHIVE)
+    set(ORK_LIB_NAMES ork_core ork_platform kcp fmt yaml-cpp)
+
+    foreach(_name IN LISTS ORK_LIB_NAMES)
+        if(WIN32)
+            set(_ork_candidates
+                "${ORK_LIBRARY_DIR}/${_name}.lib"
+                "${ORK_LIBRARY_DIR}/lib${_name}.a")
+        else()
+            set(_ork_candidates
+                "${ORK_LIBRARY_DIR}/lib${_name}.a"
+                "${ORK_LIBRARY_DIR}/${_name}.lib")
+        endif()
+
+        set(_ork_resolved "")
+        foreach(_candidate IN LISTS _ork_candidates)
+            if(EXISTS "${_candidate}")
+                set(_ork_resolved "${_candidate}")
+                break()
+            endif()
+        endforeach()
+
+        if(_ork_resolved STREQUAL "")
+            set(ORK_FOUND FALSE)
+            if(Ork_FIND_REQUIRED)
+                message(FATAL_ERROR
+                    "Missing Ork static library '${_name}' in:\n"
+                    "  ${ORK_LIBRARY_DIR}\n"
+                    "Looked for any of:\n"
+                    "  ${_ork_candidates}\n"
+                    "Nothing named libork_static.a / ork_static.lib was found either, "
+                    "so this directory\nholds neither a delivery package nor a split "
+                    "development layout.\n"
+                    "Re-pack the SDK for '${ORK_PLATFORM}' (see cpp/README.md).")
+            endif()
+            return()
+        endif()
+
+        # yaml-cpp → ORK_LIB_YAML_CPP_PATH
+        string(TOUPPER "${_name}" _ork_upper)
+        string(REPLACE "-" "_" _ork_upper "${_ork_upper}")
+        set(ORK_LIB_${_ork_upper}_PATH "${_ork_resolved}")
+    endforeach()
+
+    set(ORK_CORE_LIBRARY     "${ORK_LIB_ORK_CORE_PATH}")
+    set(ORK_PLATFORM_LIBRARY "${ORK_LIB_ORK_PLATFORM_PATH}")
+endif()
 
 # ---------------------------------------------------------------------------
 # 4. Threads (asio io_context, the internal network pump thread, OrkClient)
@@ -243,7 +305,9 @@ if(NOT SODIUM_LIBRARY AND PKG_CONFIG_FOUND)
     endif()
 endif()
 
-if(NOT SODIUM_LIBRARY)
+# In the merged payload libsodium is already inside the archive, so a missing
+# standalone libsodium is not an error there — only the split layout needs it.
+if(NOT ORK_MERGED_ARCHIVE AND NOT SODIUM_LIBRARY)
     set(ORK_FOUND FALSE)
     if(Ork_FIND_REQUIRED)
         message(FATAL_ERROR
@@ -288,6 +352,58 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# 8b. Delivery metadata + plaintext-bootstrap flag
+#
+#     ORK_ALLOW_PLAINTEXT_BOOTSTRAP changes the layout of OrkClient and the value
+#     of the header-only constants, so it MUST match how the archives were built
+#     — a consumer built with ON linking an OFF library is an ODR break, not a
+#     link error. Priority:
+#
+#       1. -DORK_PLAINTEXT_BOOTSTRAP=ON|OFF        (explicit wins)
+#       2. manifest.json inside the payload          (authoritative)
+#       3. payload form heuristic: merged → OFF, split → ON
+#
+#     (3) exists because a delivery package is a formal build (plaintext off),
+#     while a split layout is exported from a development tree, where the demo's
+#     loopback tests need plaintext on.
+# ---------------------------------------------------------------------------
+set(ORK_MANIFEST_FILE "")
+foreach(_mf "${ORK_LIBRARY_DIR}/manifest.json" "${ORK_ROOT}/manifest.json")
+    if(EXISTS "${_mf}")
+        set(ORK_MANIFEST_FILE "${_mf}")
+        break()
+    endif()
+endforeach()
+
+set(ORK_MANIFEST_SDK_ID "")
+set(ORK_MANIFEST_GIT_SHA "")
+set(_ork_manifest_plaintext "")
+if(ORK_MANIFEST_FILE)
+    file(READ "${ORK_MANIFEST_FILE}" _ork_manifest_json)
+    string(JSON ORK_MANIFEST_SDK_ID ERROR_VARIABLE _ork_e1
+           GET "${_ork_manifest_json}" package sdk_id)
+    string(JSON ORK_MANIFEST_GIT_SHA ERROR_VARIABLE _ork_e2
+           GET "${_ork_manifest_json}" source git_sha)
+    string(JSON _ork_manifest_plaintext ERROR_VARIABLE _ork_e3
+           GET "${_ork_manifest_json}" security plaintext_bootstrap_compiled)
+    if(_ork_e1 OR _ork_e2 OR _ork_e3)
+        set(_ork_manifest_plaintext "")
+    endif()
+endif()
+
+if(NOT DEFINED ORK_PLAINTEXT_BOOTSTRAP)
+    if(_ork_manifest_plaintext STREQUAL "True" OR _ork_manifest_plaintext STREQUAL "TRUE")
+        set(ORK_PLAINTEXT_BOOTSTRAP ON)
+    elseif(_ork_manifest_plaintext STREQUAL "False" OR _ork_manifest_plaintext STREQUAL "FALSE")
+        set(ORK_PLAINTEXT_BOOTSTRAP OFF)
+    elseif(ORK_MERGED_ARCHIVE)
+        set(ORK_PLAINTEXT_BOOTSTRAP OFF)
+    else()
+        set(ORK_PLAINTEXT_BOOTSTRAP ON)
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # 9. Imported targets
 # ---------------------------------------------------------------------------
 if(NOT TARGET Ork::Thirdparty)
@@ -310,31 +426,56 @@ endif()
 # Defining it unconditionally is harmless on macOS/Linux (ork_export.h ignores
 # ORK_STATIC outside _WIN32; visibility stays default).
 list(APPEND ORK_COMPILE_DEFINITIONS ORK_STATIC=1)
-# The pre-built demo SDK is produced with -DORK_ALLOW_PLAINTEXT_BOOTSTRAP=ON,
-# which enables the loopback-only development bootstrap. Code that must never
-# use plaintext simply never selects BootstrapSecurityMode::PlaintextDevelopment
-# (and OrkBootstrapSecurity_PlaintextDev on the C ABI).
-list(APPEND ORK_COMPILE_DEFINITIONS ORK_ALLOW_PLAINTEXT_BOOTSTRAP=1)
-
-if(NOT TARGET Ork::Platform)
-    add_library(Ork::Platform STATIC IMPORTED GLOBAL)
-    set_target_properties(Ork::Platform PROPERTIES
-        IMPORTED_LOCATION "${ORK_PLATFORM_LIBRARY}"
-        INTERFACE_INCLUDE_DIRECTORIES "${ORK_INCLUDE_DIR}"
-        INTERFACE_COMPILE_DEFINITIONS "${ORK_COMPILE_DEFINITIONS}"
-        INTERFACE_LINK_LIBRARIES
-            "${ORK_LIB_FMT_PATH};${ORK_LIB_YAML_CPP_PATH};${SODIUM_LIBRARY}")
+# The plaintext development bootstrap is a build-time switch of the archives,
+# not of the consumer — see 8b for how ORK_PLAINTEXT_BOOTSTRAP is decided.
+if(ORK_PLAINTEXT_BOOTSTRAP)
+    list(APPEND ORK_COMPILE_DEFINITIONS ORK_ALLOW_PLAINTEXT_BOOTSTRAP=1)
 endif()
 
-if(NOT TARGET Ork::Core)
-    add_library(Ork::Core STATIC IMPORTED GLOBAL)
-    set_target_properties(Ork::Core PROPERTIES
-        IMPORTED_LOCATION "${ORK_CORE_LIBRARY}"
-        INTERFACE_INCLUDE_DIRECTORIES "${ORK_INCLUDE_DIR}"
-        INTERFACE_COMPILE_DEFINITIONS "${ORK_COMPILE_DEFINITIONS}"
-        # Order matters for static archives: dependants first, dependencies last.
-        INTERFACE_LINK_LIBRARIES
-            "Ork::Platform;\
+if(ORK_MERGED_ARCHIVE)
+    # Merged delivery payload: one archive, OpenSSL/libsodium/kcp/fmt/yaml-cpp
+    # are already inside it. Only system libraries plus the C++ runtime remain.
+    # OpenSSL is still located above for its headers (<asio/ssl.hpp>), but the
+    # implementation must NOT be linked a second time.
+    if(NOT TARGET Ork::Platform)
+        add_library(Ork::Platform INTERFACE IMPORTED GLOBAL)
+        set_target_properties(Ork::Platform PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES "${ORK_INCLUDE_DIR}"
+            INTERFACE_COMPILE_DEFINITIONS "${ORK_COMPILE_DEFINITIONS}")
+    endif()
+
+    if(NOT TARGET Ork::Core)
+        add_library(Ork::Core STATIC IMPORTED GLOBAL)
+        set_target_properties(Ork::Core PROPERTIES
+            IMPORTED_LOCATION "${ORK_MERGED_ARCHIVE}"
+            INTERFACE_INCLUDE_DIRECTORIES
+                "${ORK_INCLUDE_DIR};${OPENSSL_INCLUDE_DIR}"
+            INTERFACE_COMPILE_DEFINITIONS "${ORK_COMPILE_DEFINITIONS}"
+            INTERFACE_LINK_LIBRARIES
+                "Ork::Thirdparty;\
+Threads::Threads;\
+${ORK_SYSTEM_LIBRARIES}")
+    endif()
+else()
+    if(NOT TARGET Ork::Platform)
+        add_library(Ork::Platform STATIC IMPORTED GLOBAL)
+        set_target_properties(Ork::Platform PROPERTIES
+            IMPORTED_LOCATION "${ORK_PLATFORM_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${ORK_INCLUDE_DIR}"
+            INTERFACE_COMPILE_DEFINITIONS "${ORK_COMPILE_DEFINITIONS}"
+            INTERFACE_LINK_LIBRARIES
+                "${ORK_LIB_FMT_PATH};${ORK_LIB_YAML_CPP_PATH};${SODIUM_LIBRARY}")
+    endif()
+
+    if(NOT TARGET Ork::Core)
+        add_library(Ork::Core STATIC IMPORTED GLOBAL)
+        set_target_properties(Ork::Core PROPERTIES
+            IMPORTED_LOCATION "${ORK_CORE_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${ORK_INCLUDE_DIR}"
+            INTERFACE_COMPILE_DEFINITIONS "${ORK_COMPILE_DEFINITIONS}"
+            # Order matters for static archives: dependants first, dependencies last.
+            INTERFACE_LINK_LIBRARIES
+                "Ork::Platform;\
 ${ORK_LIB_KCP_PATH};\
 Ork::Thirdparty;\
 OpenSSL::SSL;\
@@ -342,6 +483,7 @@ OpenSSL::Crypto;\
 ${SODIUM_LIBRARY};\
 Threads::Threads;\
 ${ORK_SYSTEM_LIBRARIES}")
+    endif()
 endif()
 
 # Sodium headers are optional (no public Ork header needs them) — publish the
@@ -353,9 +495,16 @@ endif()
 
 set(ORK_FOUND TRUE)
 
+if(ORK_MERGED_ARCHIVE)
+    set(_ork_required_vars ORK_MERGED_ARCHIVE ORK_INCLUDE_DIR)
+else()
+    set(_ork_required_vars
+        ORK_CORE_LIBRARY ORK_PLATFORM_LIBRARY ORK_INCLUDE_DIR SODIUM_LIBRARY)
+endif()
+
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(Ork
-    REQUIRED_VARS ORK_CORE_LIBRARY ORK_PLATFORM_LIBRARY ORK_INCLUDE_DIR SODIUM_LIBRARY
+    REQUIRED_VARS ${_ork_required_vars}
     VERSION_VAR ORK_ABI_VERSION
     FAIL_MESSAGE "Could not find the pre-built Ork SDK")
 
@@ -364,6 +513,24 @@ if(NOT Ork_FIND_QUIETLY)
     message(STATUS "  headers : ${ORK_INCLUDE_DIR}")
     message(STATUS "  vendored: ${ORK_THIRDPARTY_INCLUDE_DIR}")
     message(STATUS "  libs    : ${ORK_LIBRARY_DIR}")
+    if(ORK_MERGED_ARCHIVE)
+        message(STATUS "  payload : merged archive (${ORK_MERGED_ARCHIVE})")
+    else()
+        message(STATUS "  payload : split archives (ork_core + ork_platform + 3 vendored)")
+    endif()
+    if(ORK_MANIFEST_SDK_ID)
+        message(STATUS "  package : ${ORK_MANIFEST_SDK_ID} — built from "
+                       "${ORK_MANIFEST_GIT_SHA}")
+    else()
+        message(STATUS "  package : no manifest.json next to the payload "
+                       "(provenance unknown)")
+    endif()
     message(STATUS "  OpenSSL : ${OPENSSL_VERSION} (${OPENSSL_INCLUDE_DIR})")
-    message(STATUS "  sodium  : ${SODIUM_LIBRARY}")
+    if(SODIUM_LIBRARY)
+        message(STATUS "  sodium  : ${SODIUM_LIBRARY}")
+    else()
+        message(STATUS "  sodium  : inside the merged archive")
+    endif()
+    message(STATUS "  plaintext bootstrap: ${ORK_PLAINTEXT_BOOTSTRAP} "
+                   "(must match the archives; override with -DORK_PLAINTEXT_BOOTSTRAP=ON|OFF)")
 endif()

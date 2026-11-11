@@ -211,12 +211,25 @@ ORK_LOG_LEVEL=trace|debug|info|warn|error|off   # 默认 warn
 
 ## 已知限制与说明
 
-* **`lib/` 目前只有 `macos-arm64`**。要跑 Linux / Windows，需要先在
-  `harmonia_ork` 侧为对应 triplet 构建并把 `.a` / `.lib` 放进 `lib/<os>-<arch>/`。
-  `FindOrk.cmake` 按平台优先探测两种命名（Windows `ork_core.lib`，macOS/Linux
-  `libork_core.a`），两个都试，所以同一个目录里放哪种都能被找到——但**不要混放**：
-  同一 triplet 目录里同时存在 `ork_core.lib` 和 `libork_core.a` 时，Windows 优先
-  取 `.lib`，其余平台优先取 `.a`，容易在排障时看错实际链接的是哪一个。
+* **`lib/<triplet>/` 接受两种载荷形态，`FindOrk.cmake` 自动识别，合并包优先**：
+
+  | 形态 | 目录里的文件 | 来源 | 外部依赖 |
+  | --- | --- | --- | --- |
+  | 合并包（交付物） | `ork_static.lib` / `libork_static.a` 单文件 | `pack_static.ps1` / `pack_static.sh` 产出的 `dist/<os>/lib/` | 只要 OpenSSL 头（实现已并入归档） |
+  | 分离库（开发） | `ork_core` `ork_platform` `kcp` `fmt` `yaml-cpp` 五个 | `harmonia_ork` 构建树 | OpenSSL + libsodium + 五个归档 |
+
+  合并包把 OpenSSL、libsodium、kcp、fmt、yaml-cpp 全部并了进去，链接时只剩系统库
+  （Windows：`ws2_32 mswsock crypt32`；macOS：CoreFoundation + resolv）。**不要**在这
+  种形态下再链 `libssl.lib` / `sodium.lib`，重复引入没有收益。
+
+  把包的 `manifest.json` 一起放进去，configure 就能打出版本与来源提交
+  （`package : ork-static-sdk-0.2.0-darwin-arm64 — built from c09d3619…`）；不放也能跑，
+  只是 provenance 显示 unknown。
+
+  分离库形态下 `FindOrk.cmake` 按平台优先探测两种命名（Windows `ork_core.lib`，
+  macOS/Linux `libork_core.a`），两个都试——但**不要混放**：同一目录里同时存在
+  `ork_core.lib` 和 `libork_core.a` 时，Windows 优先取 `.lib`，其余平台优先取 `.a`，
+  排障时容易看错实际链接的是哪一个。
 * **Windows 静态消费必须定义 `ORK_STATIC`**（`FindOrk.cmake` 已自动加到
   `INTERFACE_COMPILE_DEFINITIONS`）。少了它，`ork_export.h` 会把 C ABI 声明展开成
   `__declspec(dllimport)`，而 `dllimport` 符号无法从 `.lib` 归档解析，表现是链接期
@@ -224,14 +237,21 @@ ORK_LOG_LEVEL=trace|debug|info|warn|error|off   # 默认 warn
 * **MSVC 运行时必须是 `/MD`（默认）**。Ork 归档用 `/MD` 编译，消费方若改 `/MT`
   会在链接期撞 `LNK2038: RuntimeLibrary 不匹配`。`CMakeLists.txt` 只对 Ork 自身
   强制了 `CMAKE_MSVC_RUNTIME_LIBRARY`，下游工程若自己覆盖了该变量，需要保持同值。
-* **Windows 上 libsodium 与 OpenSSL 不在 SDK payload 里，必须另外提供**。这两个
-  是外部依赖（与 macOS 从 Homebrew 取同理）：
+* **分离库形态下，Windows 需要另外提供 libsodium 与 OpenSSL**（合并包形态两者都已
+  并入归档，只剩 OpenSSL 头需要）：
   - libsodium：`sodium.lib`，可放在 `lib/windows-x64/` 里直接生效（`FindOrk.cmake`
     会把该目录作为 hint），或传 `-DSODIUM_ROOT=<prefix>`；
   - OpenSSL ≥ 3：`libssl.lib` / `libcrypto.lib` + 头文件，传
     `-DOPENSSL_ROOT_DIR=<prefix>`（该目录下需有 `include/openssl/ssl.h` 与 `lib/`）。
     用 vcpkg 的话 `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake`
     可以一次性带出两者，vcpkg 的 triplet 要选 `x64-windows-static-md` 以对齐 `/MD`。
+* **`ORK_ALLOW_PLAINTEXT_BOOTSTRAP` 必须与归档的构建选项一致**。这个宏会改变
+  `OrkClient` 的成员布局与 header-only 常量，ON 的消费方链 OFF 的库属于 ODR 破坏，
+  不报链接错误、只表现为诡异崩溃。`FindOrk.cmake` 的判定顺序是：显式
+  `-DORK_PLAINTEXT_BOOTSTRAP=ON|OFF` → 载荷里的 `manifest.json` → 形态推断
+  （合并包 OFF、分离库 ON）。**正式交付包是 OFF**，所以拿它跑本仓库的全量测试会
+  在 `ork_host_create` 处 fail closed——那是预期行为，不是包坏了；要跑全量测试请
+  用 `--allow-plaintext-bootstrap` / `-AllowPlaintextBootstrap` 打一份开发包。
 * **C ABI Host 恒定使用 `PlaintextDevelopment` bootstrap**，因此 SDK 会把监听
   地址强制收敛到 loopback。生产环境请用 C++ SDK（demo 03）配
   `TlsServerAuthenticated` + TLS 1.3 证书链 / 私钥。
