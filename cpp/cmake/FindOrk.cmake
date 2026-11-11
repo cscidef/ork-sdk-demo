@@ -96,36 +96,66 @@ if(NOT IS_DIRECTORY "${ORK_LIBRARY_DIR}")
 endif()
 
 # ---------------------------------------------------------------------------
-# 3. Existence check for every archive the imported targets will reference.
+# 3. Resolve every archive the imported targets will reference.
 #    ork_core      — crypto/connection/transport/codec/sdk/client aggregate
 #    ork_platform  — config / logging / time / secure random (leaf library)
 #    kcp, fmt, yaml-cpp — third-party pieces compiled as static archives
 #    (asio, spdlog and concurrentqueue are header-only → nothing to link)
 #
-#    This loop only validates; it collects nothing. The actual link line is
-#    assembled on Ork::Core / Ork::Platform in section 9, so a half-unpacked
-#    SDK fails here with one clear message instead of at link time with a wall
-#    of undefined symbols.
+#    Naming is platform-dependent, so each library is probed in both forms and
+#    the platform-preferred one wins:
+#        MSVC / Windows  → <name>.lib        (ork_core.lib, yaml-cpp.lib, ...)
+#        macOS / Linux   → lib<name>.a       (libork_core.a, libyaml-cpp.a, ...)
+#    Probing both means one lib/<triplet>/ directory can hold either flavour,
+#    and a MinGW build on Windows still finds the GNU archives.
 #
-#    Only GNU-style "lib<name>.a" is recognised — currently macOS/Linux only.
+#    This loop resolves AND validates. The actual link line is assembled on
+#    Ork::Core / Ork::Platform in section 9, so a half-unpacked SDK fails here
+#    with one clear message instead of at link time with a wall of undefined
+#    symbols.
 # ---------------------------------------------------------------------------
 set(ORK_LIB_NAMES ork_core ork_platform kcp fmt yaml-cpp)
+
 foreach(_name IN LISTS ORK_LIB_NAMES)
-    set(_path "${ORK_LIBRARY_DIR}/lib${_name}.a")
-    if(NOT EXISTS "${_path}")
+    if(WIN32)
+        set(_ork_candidates
+            "${ORK_LIBRARY_DIR}/${_name}.lib"
+            "${ORK_LIBRARY_DIR}/lib${_name}.a")
+    else()
+        set(_ork_candidates
+            "${ORK_LIBRARY_DIR}/lib${_name}.a"
+            "${ORK_LIBRARY_DIR}/${_name}.lib")
+    endif()
+
+    set(_ork_resolved "")
+    foreach(_candidate IN LISTS _ork_candidates)
+        if(EXISTS "${_candidate}")
+            set(_ork_resolved "${_candidate}")
+            break()
+        endif()
+    endforeach()
+
+    if(_ork_resolved STREQUAL "")
         set(ORK_FOUND FALSE)
         if(Ork_FIND_REQUIRED)
             message(FATAL_ERROR
-                "Missing Ork static library: ${_path}\n"
-                "Re-pack the SDK for '${ORK_PLATFORM}' (see cpp/README.md).\n"
-                "Only GNU-style .a archives are supported (currently macOS/Linux only).")
+                "Missing Ork static library '${_name}' in:\n"
+                "  ${ORK_LIBRARY_DIR}\n"
+                "Looked for any of:\n"
+                "  ${_ork_candidates}\n"
+                "Re-pack the SDK for '${ORK_PLATFORM}' (see cpp/README.md).")
         endif()
         return()
     endif()
+
+    # yaml-cpp → ORK_LIB_YAML_CPP_PATH
+    string(TOUPPER "${_name}" _ork_upper)
+    string(REPLACE "-" "_" _ork_upper "${_ork_upper}")
+    set(ORK_LIB_${_ork_upper}_PATH "${_ork_resolved}")
 endforeach()
 
-set(ORK_CORE_LIBRARY "${ORK_LIBRARY_DIR}/libork_core.a")
-set(ORK_PLATFORM_LIBRARY "${ORK_LIBRARY_DIR}/libork_platform.a")
+set(ORK_CORE_LIBRARY     "${ORK_LIB_ORK_CORE_PATH}")
+set(ORK_PLATFORM_LIBRARY "${ORK_LIB_ORK_PLATFORM_PATH}")
 
 # ---------------------------------------------------------------------------
 # 4. Threads (asio io_context, the internal network pump thread, OrkClient)
@@ -222,11 +252,19 @@ endif()
 #    macOS: CoreFoundation + libresolv (asio / OpenSSL internals). The C++
 #           runtime comes from the linker driver — consumers compiling C
 #           sources must set LINKER_LANGUAGE CXX (see demos/*/CMakeLists.txt).
+#    Windows: Winsock + mswsock (asio), crypt32 (OpenSSL certificate stores).
+#             MSVC links the C++ runtime automatically from /MD or /MDd, so no
+#             explicit runtime library is appended here — but the Ork archives
+#             are built with /MD, and mixing in /MT fails at link time with
+#             LNK2038 (RuntimeLibrary mismatch). Keep CMAKE_MSVC_RUNTIME_LIBRARY
+#             at its default "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL".
 #    Linux: dl + rt for asio timers.
 # ---------------------------------------------------------------------------
 set(ORK_SYSTEM_LIBRARIES "")
 if(APPLE)
     list(APPEND ORK_SYSTEM_LIBRARIES "-framework CoreFoundation" resolv)
+elseif(WIN32)
+    list(APPEND ORK_SYSTEM_LIBRARIES ws2_32 mswsock crypt32)
 elseif(UNIX)
     list(APPEND ORK_SYSTEM_LIBRARIES dl rt)
 endif()
@@ -260,6 +298,12 @@ set(ORK_COMPILE_DEFINITIONS "")
 if(NOT WIN32)
     list(APPEND ORK_COMPILE_DEFINITIONS ORK_HAVE_TLS=1)
 endif()
+# Static consumption: on Windows the C ABI headers expand OrkExport to
+# __declspec(dllimport) unless ORK_STATIC is defined, and dllimport symbols
+# cannot be satisfied from a .lib archive → LNK2019 / LNK4217 on every call.
+# Defining it unconditionally is harmless on macOS/Linux (ork_export.h ignores
+# ORK_STATIC outside _WIN32; visibility stays default).
+list(APPEND ORK_COMPILE_DEFINITIONS ORK_STATIC=1)
 # The pre-built demo SDK is produced with -DORK_ALLOW_PLAINTEXT_BOOTSTRAP=ON,
 # which enables the loopback-only development bootstrap. Code that must never
 # use plaintext simply never selects BootstrapSecurityMode::PlaintextDevelopment
@@ -273,7 +317,7 @@ if(NOT TARGET Ork::Platform)
         INTERFACE_INCLUDE_DIRECTORIES "${ORK_INCLUDE_DIR}"
         INTERFACE_COMPILE_DEFINITIONS "${ORK_COMPILE_DEFINITIONS}"
         INTERFACE_LINK_LIBRARIES
-            "${ORK_LIBRARY_DIR}/libfmt.a;${ORK_LIBRARY_DIR}/libyaml-cpp.a;${SODIUM_LIBRARY}")
+            "${ORK_LIB_FMT_PATH};${ORK_LIB_YAML_CPP_PATH};${SODIUM_LIBRARY}")
 endif()
 
 if(NOT TARGET Ork::Core)
@@ -285,7 +329,7 @@ if(NOT TARGET Ork::Core)
         # Order matters for static archives: dependants first, dependencies last.
         INTERFACE_LINK_LIBRARIES
             "Ork::Platform;\
-${ORK_LIBRARY_DIR}/libkcp.a;\
+${ORK_LIB_KCP_PATH};\
 Ork::Thirdparty;\
 OpenSSL::SSL;\
 OpenSSL::Crypto;\

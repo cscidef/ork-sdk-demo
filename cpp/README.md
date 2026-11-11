@@ -213,6 +213,17 @@ ORK_LOG_LEVEL=trace|debug|info|warn|error|off   # 默认 warn
 
 * **`lib/` 目前只有 `macos-arm64`**。要跑 Linux / Windows，需要先在
   `harmonia_ork` 侧为对应 triplet 构建并把 `.a` / `.lib` 放进 `lib/<os>-<arch>/`。
+  `FindOrk.cmake` 按平台优先探测两种命名（Windows `ork_core.lib`，macOS/Linux
+  `libork_core.a`），两个都试，所以同一个目录里放哪种都能被找到——但**不要混放**：
+  同一 triplet 目录里同时存在 `ork_core.lib` 和 `libork_core.a` 时，Windows 优先
+  取 `.lib`，其余平台优先取 `.a`，容易在排障时看错实际链接的是哪一个。
+* **Windows 静态消费必须定义 `ORK_STATIC`**（`FindOrk.cmake` 已自动加到
+  `INTERFACE_COMPILE_DEFINITIONS`）。少了它，`ork_export.h` 会把 C ABI 声明展开成
+  `__declspec(dllimport)`，而 `dllimport` 符号无法从 `.lib` 归档解析，表现是链接期
+  成片 `LNK2019` / `LNK4217`——不是库缺符号，是宏没对齐。
+* **MSVC 运行时必须是 `/MD`（默认）**。Ork 归档用 `/MD` 编译，消费方若改 `/MT`
+  会在链接期撞 `LNK2038: RuntimeLibrary 不匹配`。`CMakeLists.txt` 只对 Ork 自身
+  强制了 `CMAKE_MSVC_RUNTIME_LIBRARY`，下游工程若自己覆盖了该变量，需要保持同值。
 * **C ABI Host 恒定使用 `PlaintextDevelopment` bootstrap**，因此 SDK 会把监听
   地址强制收敛到 loopback。生产环境请用 C++ SDK（demo 03）配
   `TlsServerAuthenticated` + TLS 1.3 证书链 / 私钥。

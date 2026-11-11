@@ -89,6 +89,16 @@ and into `cpp/lib/<os>-<arch>/` for the C++ static libraries. See
 [`server/linux-x64/README.md`](server/linux-x64/README.md) and
 [`server/windows-x64/README.md`](server/windows-x64/README.md).
 
+`cpp/cmake/FindOrk.cmake` resolves both naming conventions: `<name>.lib` on Windows
+(`ork_core.lib`, `yaml-cpp.lib`, …) and `lib<name>.a` on macOS/Linux. It also adds
+`ORK_STATIC` to the consumer's compile definitions, which is what makes the C ABI
+headers declare plain extern symbols instead of `__declspec(dllimport)` when linking a
+static `.lib` — omit it and every call fails at link time with `LNK2019`.
+
+For Windows, `cpp/lib/windows-x64/` must hold: `ork_core.lib`, `ork_platform.lib`,
+`kcp.lib`, `fmt.lib`, `yaml-cpp.lib`. The MSVC runtime must stay at `/MD` (default);
+`/MT` collides with the archives and fails with `LNK2038`.
+
 Platform detection lives in [`server/start.sh`](server/start.sh): it maps `uname -s` /
 `uname -m` onto the matching `server/<platform>/` directory and exits with a clear error
 on anything unsupported.
