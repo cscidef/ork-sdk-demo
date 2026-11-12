@@ -36,11 +36,18 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-    set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
+if(NOT CMAKE_CONFIGURATION_TYPES)
+    if(NOT CMAKE_BUILD_TYPE)
+        set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
+    endif()
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
+                 Debug Release RelWithDebInfo MinSizeRel)
 endif()
-set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
-             Debug Release RelWithDebInfo MinSizeRel)
+
+# 多配置生成器（Visual Studio / Xcode）不认 CMAKE_BUILD_TYPE，构建类型由
+# --config 决定；此时 cache 里根本没有这个变量，set_property(CACHE ...) 会报
+# "could not find CACHE variable"。上面这层保护就是为了让同一份 CMakeLists
+# 在 Ninja / Makefiles 与 VS 生成器下都能 configure 通过。
 
 # ---------------------------------------------------------------------------
 # 定位预编译 Ork SDK。
@@ -82,6 +89,21 @@ function(ork_configure_demo target)
 
     if(MSVC)
         target_compile_options("${target}" PRIVATE /W4 /utf-8 /bigobj /permissive-)
+
+        # C 源文件需要 <stdatomic.h>，而 MSVC 只有开了 /experimental:c11atomics
+        # 才提供（/std:c11 本身不含）。不能用 $<COMPILE_LANGUAGE:C> 做门条件：
+        # Visual Studio 生成器下它求值为空，选项被静默丢弃，症状是 C 源文件里
+        # _Atomic 未定义。按源文件扩展名判断在各生成器下都成立。
+        get_target_property(_ork_target_sources "${target}" SOURCES)
+        if(_ork_target_sources)
+            foreach(_ork_src IN LISTS _ork_target_sources)
+                if(_ork_src MATCHES "\\.[cC]$")
+                    target_compile_options("${target}" PRIVATE /experimental:c11atomics)
+                    break()
+                endif()
+            endforeach()
+        endif()
+
         target_compile_definitions("${target}" PRIVATE
             _WIN32_WINNT=0x0A00
             WIN32_LEAN_AND_MEAN
