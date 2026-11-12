@@ -3,11 +3,11 @@
 ## Status: Planned (Unity bindings exist in main repo)
 
 Standalone C# bindings (outside Unity) are not yet implemented.
-However, a complete Unity C# runtime already exists in the Ork main repository at `unity/com.hado.ork/`.
+However, a complete Unity C# runtime already exists in the Ork main repository at `unity/com.fai-link.ork/`.
 
 ## Existing Unity Bindings
 
-The Ork project includes a full Unity UPM package (`com.hado.ork` v0.2.0) with:
+The Ork project includes a full Unity UPM package (`com.fai-link.ork` v0.3.0) with:
 - `OrkSession.cs` — Host (server) wrapper
 - `OrkClientSession.cs` — Client wrapper  
 - `OrkNative.cs` / `OrkClientNative.cs` — Raw P/Invoke declarations
@@ -61,7 +61,7 @@ If you're building a Unity project, install the UPM package from the Ork main re
 ```json
 {
   "dependencies": {
-    "com.hado.ork": "file:../../harmonia_ork/unity/com.hado.ork"
+    "com.fai-link.ork": "file:../../harmonia_ork/unity/com.fai-link.ork"
   }
 }
 ```
@@ -69,4 +69,4 @@ If you're building a Unity project, install the UPM package from the Ork main re
 ### Contributing
 
 The C ABI headers are in `cpp/include/ork/sdk/c/`. The Unity C# source in the main repo
-(`harmonia_ork/unity/com.hado.ork/Runtime/`) serves as the reference implementation for P/Invoke patterns.
+(`harmonia_ork/unity/com.fai-link.ork/Runtime/`) serves as the reference implementation for P/Invoke patterns.

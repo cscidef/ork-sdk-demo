@@ -11,4 +11,4 @@ dotnet run -- --host 127.0.0.1 --port 9400
 ## Status
 
 Not yet implemented. See `csharp/README.md` for the planned approach.
-For Unity users, see `harmonia_ork/unity/com.hado.ork/Samples~/EchoServer/`.
+For Unity users, see `harmonia_ork/unity/com.fai-link.ork/Samples~/EchoServer/`.

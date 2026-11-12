@@ -95,9 +95,18 @@ and into `cpp/lib/<os>-<arch>/` for the C++ static libraries. See
 headers declare plain extern symbols instead of `__declspec(dllimport)` when linking a
 static `.lib` — omit it and every call fails at link time with `LNK2019`.
 
-For Windows, `cpp/lib/windows-x64/` must hold: `ork_core.lib`, `ork_platform.lib`,
-`kcp.lib`, `fmt.lib`, `yaml-cpp.lib`. The MSVC runtime must stay at `/MD` (default);
-`/MT` collides with the archives and fails with `LNK2038`.
+For Windows, `cpp/lib/windows-x64/` accepts either payload form, and `FindOrk.cmake` probes
+the merged one first:
+
+- **merged** — what the packager ships: `ork_static.lib` on its own. OpenSSL, libsodium,
+  KCP, fmt and yaml-cpp are already inside the archive, so no extra `.lib` is needed
+  (only OpenSSL *headers* for the C++ surface).
+- **split** — a dev build tree: `ork_core.lib`, `ork_platform.lib`, `kcp.lib`, `fmt.lib`,
+  `yaml-cpp.lib`, plus `sodium.lib` and OpenSSL import libs from your own prefix.
+
+Do not mix both in the same directory. The MSVC runtime must stay at `/MD` (default);
+`/MT` collides with the archives and fails with `LNK2038`. The full checklist lives in
+[`cpp/lib/windows-x64/README.md`](cpp/lib/windows-x64/README.md).
 
 Platform detection lives in [`server/start.sh`](server/start.sh): it maps `uname -s` /
 `uname -m` onto the matching `server/<platform>/` directory and exits with a clear error
@@ -220,7 +229,7 @@ process on an ephemeral port, so they need no external server.
 |----------|-----------|--------|
 | Go | [`go/`](go/) | 🚧 CGo FFI over the 22-function C ABI — see [`go/README.md`](go/README.md) |
 | C# (.NET) | [`csharp/`](csharp/) | 🚧 P/Invoke — see [`csharp/README.md`](csharp/README.md) |
-| C# (Unity) | `harmonia_ork/unity/com.hado.ork/` | ✅ Shipped in the main repo (UPM package `com.hado.ork` v0.2.0) |
+| C# (Unity) | `harmonia_ork/unity/com.fai-link.ork/` | ✅ Shipped in the main repo (UPM package `com.fai-link.ork` v0.3.0) |
 
 ---
 

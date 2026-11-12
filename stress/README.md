@@ -96,15 +96,22 @@ bash lib/kcp/build.sh
 python -c "from client.ork_client_session import OrkClientSession; print('OK')"
 ```
 
+> **关于文中的机器编号**：`225` / `140` / `96` 是历史压测环境的机器（`192.168.31.x` 网段），
+> 保留下来是为了对上当时的结论与日志。节点名、每节点客户端数、服务端地址都以
+> `stress_config.yaml` 为准，换机器只需改配置，不需要改文档或目录结构。
+
 ### 步骤 4：复制部署包到目标机器
 
 假设整个仓库已通过 rsync/scp 复制到各机器：
 
 | 机器 | 部署包路径 | 说明 |
 |------|-----------|------|
-| 225 (Mac) | `stress/package_server/` | 服务端 + 监控 |
-| 140 (Linux) | `stress/package_client_140/` | 250 客户端 |
-| 96 (Linux) | `stress/package_client_96/` | 250 客户端 |
+| 服务端机 | `stress/package_server/` | 服务端 + 监控 |
+| 客户端机 A | `stress/package_client/` | `./run.sh --node <节点名>` |
+| 客户端机 B | `stress/package_client/` | 同一个通用部署包，靠 `--node` 区分 |
+
+客户端部署包是**通用**的：节点名与每节点客户端数都在 `stress_config.yaml` 的 `nodes` 段
+里配置，不再按机器编号拆成多个目录（历史记录里服务端在 225、客户端在 140 与 96）。
 
 ### 步骤 5：启动服务端（225）
 
@@ -115,19 +122,21 @@ cd stress/package_server
 
 等待看到监控仪表盘显示 "服务端就绪"。
 
-### 步骤 6：启动客户端（140 和 96）
+### 步骤 6：启动客户端（两台客户端机）
 
-在 **140** 上：
+在客户端机 A 上：
 ```bash
-cd stress/package_client_140
-./run.sh
+cd stress/package_client
+./run.sh --node <A 的节点名>
 ```
 
-在 **96** 上：
+在客户端机 B 上：
 ```bash
-cd stress/package_client_96
-./run.sh
+cd stress/package_client
+./run.sh --node <B 的节点名>
 ```
+
+节点名与 `--server-host` 的默认值都取自 `stress_config.yaml`；单机调试可加 `--quick`。
 
 ## 日志监控
 
@@ -357,12 +366,8 @@ stress/
 ├── package_server/              # 服务端部署包 (225)
 │   ├── run.sh
 │   └── README.md
-├── package_client_140/          # 客户端部署包 (140)
-│   ├── run.sh
-│   └── README.md
-├── package_client_96/           # 客户端部署包 (96)
-│   ├── run.sh
-│   └── README.md
+├── package_client/              # 客户端部署包（通用，按 --node 区分节点）
+│   └── run.sh
 ├── results/                     # 测试结果
 │   └── <run_id>/
 │       ├── timeseries.jsonl
@@ -376,7 +381,7 @@ stress/
 ## 相关文档
 
 - [服务端部署包说明](package_server/README.md)
-- [客户端部署包说明 (140)](package_client_140/README.md)
-- [客户端部署包说明 (96)](package_client_96/README.md)
 - [Benchmark 测试](../benchmark/README.md)
-- [Validation 测试](../validation/README.md)
+
+客户端部署包的用法见本文件「启动客户端」与 `package_client/run.sh` 开头的注释；
+本仓库不含 `validation/` 目录，L0–L8 门禁仍在 `harmonia_ork` 主仓库的 `demo/validation/`。
