@@ -1,0 +1,189 @@
+{
+  "abi": {
+    "function_count": 22,
+    "header_declarations": 22,
+    "missing_in_archive": 0,
+    "version": 1
+  },
+  "archives": {
+    "inputs": [
+      {
+        "bytes": 2464232,
+        "members": 20,
+        "name": "ork_static",
+        "role": "ork_archive",
+        "sha256": "6eb45dd20752c701e04c8114e183341f64be0817541a6422aeb4c313078c27b0"
+      },
+      {
+        "bytes": 601064,
+        "members": 3,
+        "name": "ork_platform",
+        "role": "ork_archive",
+        "sha256": "59a4178690f3da4e9b3bd11a560912acafc32c1c174ee52ee4c4313e288e274f"
+      },
+      {
+        "bytes": 180496,
+        "members": 2,
+        "name": "fmt",
+        "role": "dependency_archive",
+        "sha256": "0f70f6921380f9fc05d8b07708b9cc69350e57851726a8c7a8dd0c4938ba2452"
+      },
+      {
+        "bytes": 644456,
+        "members": 30,
+        "name": "yaml-cpp",
+        "role": "dependency_archive",
+        "sha256": "412539a10cc56da6e2546c1c6d691ec05d2cd2abed61c20267e204f84b9e5221"
+      },
+      {
+        "bytes": 15072,
+        "members": 1,
+        "name": "kcp",
+        "role": "dependency_archive",
+        "sha256": "65b18e7954daefcdd208bca34a7d96591481f725f84f806ea396620fdb1aa587"
+      },
+      {
+        "bytes": 511880,
+        "members": 137,
+        "name": "libsodium",
+        "role": "dependency_archive",
+        "sha256": "0c25cec8efa8a123ba91224c310fea1b9c2b34b1b6d6c10b2df19434343d6cce"
+      },
+      {
+        "bytes": 1464624,
+        "members": 94,
+        "name": "openssl_ssl",
+        "role": "dependency_archive",
+        "sha256": "a27512485965c2f09089f477ec4046dc5c73dc26a2164e1a6279338948e54a41"
+      },
+      {
+        "bytes": 8575136,
+        "members": 1026,
+        "name": "openssl_crypto",
+        "role": "dependency_archive",
+        "sha256": "98364074866ff1af72a538d41757b03677befa2b91f075962f921a76beef32d3"
+      }
+    ],
+    "merged": {
+      "bytes": 14456192,
+      "duplicate_member_names": 0,
+      "duplicate_strong_symbols": 0,
+      "index_member": "__.SYMDEF",
+      "members": 1313,
+      "name": "libork_static.a",
+      "sha256": "805b6bbd152458c616bc511a391c44f97461a89a9290977584a9a2ff6cc0934f",
+      "weak_comdat_duplicate_symbols": 781
+    }
+  },
+  "build": {
+    "build_dir": "build/package-macos",
+    "cmake": "cmake version 4.1.1",
+    "compiler": "clang version 21.0.0 (clang-2100.4.1.1)",
+    "compiler_target": "arm64-apple-darwin27.2.0",
+    "configuration": "Release",
+    "generator": "Unix Makefiles",
+    "parallelism": 4,
+    "plaintext_bootstrap_option": "OFF"
+  },
+  "linker": {
+    "flags": "libtool -static -D -no_warning_for_no_symbols"
+  },
+  "package": {
+    "archive": "lib/libork_static.a",
+    "includes": [
+      "include/ork/sdk/c/ork_abi.h",
+      "include/ork/sdk/c/ork_client_abi.h",
+      "include/ork/sdk/c/ork_export.h"
+    ],
+    "layout": "dist/macos",
+    "name": "ork-static-sdk",
+    "sdk_id": "ork-static-sdk-0.2.0-darwin-arm64",
+    "version": "0.2.0"
+  },
+  "payload": {
+    "files": [
+      {
+        "bytes": 4600,
+        "path": "README.md",
+        "sha256": "b076c934cac7efeccd8a79a9ef2569beae3ebec7b7ad34d848f300ff2bf6e2cb"
+      },
+      {
+        "bytes": 14230,
+        "path": "THIRD-PARTY-NOTICES.md",
+        "sha256": "371955155b7d7dfde34b8cac6ed938e19c99494241491b5e6e3ab6fbbfdd19a3"
+      },
+      {
+        "bytes": 17029,
+        "path": "include/ork/sdk/c/ork_abi.h",
+        "sha256": "180daafccc839f8ff8164f427095b28f074190ab018a00e3177b8a18c8cc0844"
+      },
+      {
+        "bytes": 17904,
+        "path": "include/ork/sdk/c/ork_client_abi.h",
+        "sha256": "030a20c80c77687de8fb9e0a193e176a943a60b483e8588a7ff00fee85889072"
+      },
+      {
+        "bytes": 2215,
+        "path": "include/ork/sdk/c/ork_export.h",
+        "sha256": "70ee39745f0338a6d8c45a9f1cdc34769eb03e2418a21c8b9266ff7c37501424"
+      },
+      {
+        "bytes": 14456192,
+        "path": "lib/libork_static.a",
+        "sha256": "805b6bbd152458c616bc511a391c44f97461a89a9290977584a9a2ff6cc0934f"
+      }
+    ],
+    "self_excluded": "manifest.json, SHA256SUMS.txt"
+  },
+  "platform": {
+    "arch": "arm64",
+    "deployment_target": "26.0",
+    "min_macos": "26.0",
+    "min_macos_observed": "26.0:1313",
+    "os": "darwin"
+  },
+  "schema": "ork.static-sdk.manifest/1",
+  "security": {
+    "bootstrap_tls": "enabled",
+    "claim": "只声明构建与链接层面的事实；未做 TLS 配置审计、未声明 Production 就绪",
+    "plaintext_bootstrap_compiled": false,
+    "tls_library": "OpenSSL",
+    "tls_version": "3.6.3"
+  },
+  "source": {
+    "commit_time": "2026-11-12T18:18:57+08:00",
+    "generated_at": "2026-11-12T10:18:57Z",
+    "git_branch": "feat/desktop-static-sdk-packaging",
+    "git_dirty": false,
+    "git_dirty_entries": 0,
+    "git_sha": "2f831a160711bce9f44f254c1400e8c6f9bb6233",
+    "git_sha_short": "2f831a16",
+    "stash_entries_untouched": 1
+  },
+  "system": {
+    "link_libs": "-lc++",
+    "probe": "-force_load 全量链接 + 逐个摘除候选库得最小集 + otool -L 回读",
+    "runtime_dylibs": [
+      "/usr/lib/libSystem.B.dylib",
+      "/usr/lib/libc++.1.dylib"
+    ]
+  },
+  "verification": {
+    "abi_parity": "pass",
+    "blackbox_abi_version": "1",
+    "blackbox_bad_struct_size_rejected": "yes",
+    "blackbox_caps_plaintext": "off",
+    "blackbox_caps_tls": "on",
+    "blackbox_client_plaintext": "rejected",
+    "blackbox_client_tls": "created",
+    "blackbox_client_tls_explicit": "created",
+    "blackbox_consumer": "pass",
+    "blackbox_host_state": "fail_closed",
+    "blackbox_host_state_expected": "fail_closed",
+    "blackbox_summary": "abi_version=1 caps_tls=on caps_plaintext=off host=fail_closed client_tls=created client_tls_explicit=created client_plaintext=rejected bad_struct_size_rejected=yes result=PASS",
+    "contract_check": "pass",
+    "dist_readback": "pass",
+    "force_load": "pass",
+    "member_accounting": "pass"
+  }
+}

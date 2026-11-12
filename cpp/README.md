@@ -31,7 +31,7 @@ cpp/
 │   ├── client/…                    C++ Client SDK（ork_client / client_config）
 │   └── platform|transport|codec|crypto|connection/…   被上面两组头连带依赖
 ├── thirdparty/include/         随包分发的 header-only 依赖（asio / fmt / spdlog / ikcp / …）
-├── lib/macos-arm64/            预编译静态库（见「链接依赖」）
+├── lib/macos-arm64/            预编译静态库（交付合并包 + manifest，见「链接依赖」）
 ├── demos/
 │   ├── common/demo_support.hpp C++ demo / test 共用小工具（非 SDK 的一部分）
 │   ├── 01_echo_server/         main.c   + CMakeLists.txt + README.md
@@ -154,7 +154,7 @@ demo 抢端口，也能安全并行。
 ## 链接依赖
 
 `Ork::Core` 这个 IMPORTED 目标已经把整条链接闭包按正确顺序装好了，demo 只需
-`target_link_libraries(x PRIVATE Ork::Core)`。展开后是：
+`target_link_libraries(x PRIVATE Ork::Core)`。分离库形态展开后是：
 
 ```
 libork_core.a          Ork SDK 核心（session framework / transport / codec / crypto）
@@ -177,10 +177,11 @@ libork_core.a          Ork SDK 核心（session framework / transport / codec / 
    `__cxa_*` / `operator new` / `std::__1::*` undefined symbol。
    `ork_configure_demo()` 已对所有目标（含两个纯 C demo）统一设置。
 3. **编译宏必须与预编译库一致**：`FindOrk.cmake` 在 `Ork::Core` 上挂了
-   `INTERFACE_COMPILE_DEFINITIONS`，包含 `ORK_HAVE_TLS=1` 与
-   `ORK_ALLOW_PLAINTEXT_BOOTSTRAP=1`。宏不一致会改变 `OrkClient` 的成员布局
-   → ODR 破坏 → 运行期诡异崩溃。**不要**自己手写 `target_compile_definitions`
-   去覆盖它们，直接用 `Ork::Core`。
+   `INTERFACE_COMPILE_DEFINITIONS`——`ORK_STATIC=1` 恒定，`ORK_HAVE_TLS=1` 在非
+   Windows 平台加，`ORK_ALLOW_PLAINTEXT_BOOTSTRAP=1` 只在载荷确实是 ON 构建时才加
+   （判定顺序：显式 `-DORK_PLAINTEXT_BOOTSTRAP` → 载荷 `manifest.json` → 形态推断）。
+   宏不一致会改变 `OrkClient` 的成员布局 → ODR 破坏 → 运行期诡异崩溃。**不要**自己
+   手写 `target_compile_definitions` 去覆盖它们，直接用 `Ork::Core`。
 4. 不需要 `ASIO_*` 宏（用 `#include <asio.hpp>` 的非 standalone-Boost 形态，随包头已配好）。
 
 ---
@@ -223,7 +224,7 @@ ORK_LOG_LEVEL=trace|debug|info|warn|error|off   # 默认 warn
   种形态下再链 `libssl.lib` / `sodium.lib`，重复引入没有收益。
 
   把包的 `manifest.json` 一起放进去，configure 就能打出版本与来源提交
-  （`package : ork-static-sdk-0.2.0-darwin-arm64 — built from c09d3619…`）；不放也能跑，
+  （`package : ork-static-sdk-0.2.0-darwin-arm64 — built from 2f831a16…`）；不放也能跑，
   只是 provenance 显示 unknown。
 
   分离库形态下 `FindOrk.cmake` 按平台优先探测两种命名（Windows `ork_core.lib`，
