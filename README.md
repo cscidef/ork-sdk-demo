@@ -77,11 +77,15 @@ packaged self-contained so it runs on a clean machine with no Homebrew or SDK in
 
 ## Platform Support
 
-| Platform | Server | Python Client | C/C++ Client | Go | C# |
-|----------|--------|---------------|--------------|-----|-----|
-| **macOS arm64** | ✅ Available | ✅ Available | ✅ Available | 🚧 Planned | 🚧 Planned |
-| **Linux x64** | 🚧 Planned | ✅ Ready\* | ✅ Ready\* | 🚧 Planned | 🚧 Planned |
-| **Windows x64** | 🚧 Planned | ✅ Ready\* | ✅ Ready\* | 🚧 Planned | 🚧 Planned |
+| Platform | Server | Python Client | C/C++ Client |
+|----------|--------|---------------|--------------|
+| **macOS arm64** | ✅ Available | ✅ Available | ✅ Available |
+| **Linux x64** | 🚧 Planned | ✅ Ready\* | ✅ Ready\* |
+| **Windows x64** | 🚧 Planned | ✅ Ready\* | ✅ Ready\* |
+
+Go and .NET bindings are not published here — this repository ships the Python and C/C++
+surfaces only. The Unity C# runtime lives in the Ork main repository
+(`harmonia_ork/unity/com.fai-link.ork/`, UPM `com.fai-link.ork` v0.3.0).
 
 \* The **client** code is fully cross-platform. Running it on Linux/Windows only needs a
 server binary for that platform — drop it into `server/linux-x64/` or `server/windows-x64/`
@@ -183,8 +187,6 @@ ork-sdk-demo/
 │   ├── tests/                   test_c_abi_host / test_c_abi_client / test_cpp_roundtrip
 │   └── README.md
 │
-├── go/                        🚧 reserved — CGo binding plan
-├── csharp/                    🚧 reserved — .NET P/Invoke plan (Unity bindings live in main repo)
 └── scripts/
     ├── run_all_tests.sh         unified pipeline: Python + C++ (what `make test` runs)
     └── pack_server.sh           repack embed_minimal from a harmonia_ork build tree
@@ -223,13 +225,10 @@ never needs the `harmonia_ork` source tree.
 Demos 05 and 06 are **single-process self-proving**: they run host and client in the same
 process on an ephemeral port, so they need no external server.
 
-### Planned
+### C# (Unity)
 
-| Language | Directory | Status |
-|----------|-----------|--------|
-| Go | [`go/`](go/) | 🚧 CGo FFI over the 22-function C ABI — see [`go/README.md`](go/README.md) |
-| C# (.NET) | [`csharp/`](csharp/) | 🚧 P/Invoke — see [`csharp/README.md`](csharp/README.md) |
-| C# (Unity) | `harmonia_ork/unity/com.fai-link.ork/` | ✅ Shipped in the main repo (UPM package `com.fai-link.ork` v0.3.0) |
+The Unity C# runtime is not in this repository. It ships with the Ork main repo as
+`harmonia_ork/unity/com.fai-link.ork/` (UPM `com.fai-link.ork` v0.3.0).
 
 ---
 
