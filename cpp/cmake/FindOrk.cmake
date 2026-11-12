@@ -295,7 +295,16 @@ find_library(SODIUM_LIBRARY
     HINTS ${_ork_sodium_hints} ${SODIUM_LIBRARY_DIRS}
 )
 
-if(NOT SODIUM_LIBRARY AND PKG_CONFIG_FOUND)
+# 合并归档形态下 libsodium 已经在归档里，上面这两个探测结果一个字节都不会被
+# 链接。留在变量里只会让 configure summary 打出一个外部 libsodium（Windows 上
+# 常见命中 vcpkg 的 debug 版），看着像引了错的库。这里直接清空，摘要改由
+# ORK_MERGED_ARCHIVE 分支说明「inside the merged archive」。
+if(ORK_MERGED_ARCHIVE)
+    set(SODIUM_LIBRARY "")
+    set(SODIUM_INCLUDE_DIR "")
+endif()
+
+if(NOT ORK_MERGED_ARCHIVE AND NOT SODIUM_LIBRARY AND PKG_CONFIG_FOUND)
     pkg_check_modules(_ORK_PKG_SODIUM QUIET libsodium)
     if(_ORK_PKG_SODIUM_FOUND)
         set(SODIUM_LIBRARY "${_ORK_PKG_SODIUM_LINK_LIBRARIES}")
@@ -392,9 +401,17 @@ if(ORK_MANIFEST_FILE)
 endif()
 
 if(NOT DEFINED ORK_PLAINTEXT_BOOTSTRAP)
-    if(_ork_manifest_plaintext STREQUAL "True" OR _ork_manifest_plaintext STREQUAL "TRUE")
+    # string(JSON) 读 JSON 布尔并不返回 "True"/"False"，而是 ON/OFF 之类的文本
+    # （CMake 4.1 实测为 "ON"）。旧写法因此永远不匹配，静默走到下面的形态推断
+    # 给出 OFF —— 拿 ON 包时会编出与归档不一致的 OrkClient 布局，是 ODR 破坏
+    # 而不是链接错误。先归一化成大写再判。
+    set(_ork_mp "")
+    if(_ork_manifest_plaintext)
+        string(TOUPPER "${_ork_manifest_plaintext}" _ork_mp)
+    endif()
+    if(_ork_mp MATCHES "^(TRUE|ON|1|YES)$")
         set(ORK_PLAINTEXT_BOOTSTRAP ON)
-    elseif(_ork_manifest_plaintext STREQUAL "False" OR _ork_manifest_plaintext STREQUAL "FALSE")
+    elseif(_ork_mp MATCHES "^(FALSE|OFF|0|NO)$")
         set(ORK_PLAINTEXT_BOOTSTRAP OFF)
     elseif(ORK_MERGED_ARCHIVE)
         set(ORK_PLAINTEXT_BOOTSTRAP OFF)
