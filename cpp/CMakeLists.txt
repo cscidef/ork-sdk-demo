@@ -4,11 +4,13 @@
 #  本目录是一个 **完全自包含** 的示例工程：
 #    include/            Ork SDK 公开头文件（C ABI + C++ SDK）
 #    thirdparty/include/ 随包分发的 header-only 依赖（asio / fmt / ikcp / ...）
-#    lib/<triplet>/      预编译静态库（libork_core.a、libork_platform.a、...）
+#    lib/<triplet>/      交付单库 libork_static.a（Windows 为 ork_static.lib）
+#                        + manifest.json；分离库仅作回退形态
 #    cmake/FindOrk.cmake 把上面三者装配成 Ork::Core 这个 IMPORTED 目标
 #
-#  因此构建 demo **不需要** harmonia_ork 源码仓，只需要机器上有 OpenSSL 3 与
-#  libsodium（它们不进包，见 cpp/README.md「前置条件」）。
+#  因此构建 demo **不需要** harmonia_ork 源码仓。交付单库已把 OpenSSL 3 与
+#  libsodium 的实现并入归档，机器上只缺 OpenSSL 的头文件（<asio/ssl.hpp>），
+#  不需要装或链这两个库的二进制（见 cpp/README.md「前置条件」）。
 #
 #  用法：
 #    cmake -B build -DCMAKE_BUILD_TYPE=Debug
@@ -52,8 +54,9 @@ endif()
 # ---------------------------------------------------------------------------
 # 定位预编译 Ork SDK。
 # 产出三个 IMPORTED 目标：
-#   Ork::Core        libork_core.a + 全部下游依赖（demo 只需链接这一个）
-#   Ork::Platform    libork_platform.a（很少需要单独用）
+#   Ork::Core        libork_static.a 单库（含全部下游依赖；demo 只需链接这一个）
+#                    回退形态下才是 libork_core.a + 全部下游依赖
+#   Ork::Platform    libork_platform.a（仅分离库回退形态存在，很少需要单独用）
 #   Ork::Thirdparty  vendored header-only 依赖的 include 路径
 # 以及 Ork::Core 上挂载的编译宏 ORK_HAVE_TLS / ORK_ALLOW_PLAINTEXT_BOOTSTRAP
 # （必须与预编译库的构建配置一致，否则 OrkClient 的成员布局会漂移 → ODR 破坏）。
@@ -74,7 +77,8 @@ set(ORK_DEMO_COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/demos/common")
 # ork_configure_demo(<target>) —— 统一的 demo / test 目标装配
 #
 #   1. 链接 Ork::Core：一次性带进 include 路径、编译宏、静态库与系统库。
-#   2. LINKER_LANGUAGE CXX：**关键**。libork_core.a / libork_platform.a 是
+#   2. LINKER_LANGUAGE CXX：**关键**。libork_static.a（合并包把 C++ 实现全并了
+#      进来）以及回退形态的 libork_core.a / libork_platform.a 都是
 #      C++ 归档（asio、std::span、异常、RTTI、静态初始化）。纯 C 的 main.c
 #      如果按 C 链接，编译器驱动不会带上 C++ 运行时库，链接期会炸出成片的
 #      undefined symbol（__cxa_*、operator new、std::__1::*）。

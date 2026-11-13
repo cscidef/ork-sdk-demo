@@ -8,11 +8,13 @@
 #
 # Result targets
 # --------------
-#   Ork::Core        IMPORTED STATIC library (libork_core.a) carrying every
-#                    include directory, compile definition and link dependency
-#                    a consumer needs.  Just do:
+#   Ork::Core        IMPORTED STATIC library carrying every include directory,
+#                    compile definition and link dependency a consumer needs.
+#                    The delivery payload is the merged archive
+#                    (libork_static.a / ork_static.lib); the split layout
+#                    (libork_core.a + ...) is only a fallback.  Just do:
 #                        target_link_libraries(my_app PRIVATE Ork::Core)
-#   Ork::Platform    libork_platform.a alone (rarely needed directly)
+#   Ork::Platform    libork_platform.a alone (split fallback only, rarely needed)
 #   Ork::Thirdparty  INTERFACE target with the vendored header-only deps
 #                    (asio / fmt / ikcp.h / concurrentqueue)
 #
@@ -26,9 +28,12 @@
 #   ORK_LIBRARY_DIR             cpp/lib/<triplet>
 #   ORK_ABI_VERSION             value of ORK_ABI_VERSION in the shipped header
 #
-# System dependencies that are NOT vendored (must be present on the machine):
-#   * OpenSSL >= 3   (headers are needed by <asio/ssl.hpp>; TLS 1.3 bootstrap)
-#   * libsodium      (ChaCha20-Poly1305 AEAD cipher)
+# System dependencies:
+#   * OpenSSL >= 3   HEADERS only — <asio/ssl.hpp> is included by the public C++
+#                    headers.  In the merged delivery layout the implementation
+#                    is already inside the archive and is not linked again.
+#   * libsodium      split fallback layout only (ChaCha20-Poly1305 AEAD); the
+#                    merged archive already contains it.
 # Both are discovered through pkg-config first and fall back to
 # find_package(OpenSSL) / find_library() with Homebrew hints on macOS.
 #
@@ -119,8 +124,10 @@ endif()
 #
 #     The packaged SDK (dist/macos/lib/libork_static.a,
 #     dist/windows/lib/ork_static.lib) is a SINGLE merged archive holding the
-#     Ork core plus every vendored static dependency. Its member set is equal
-#     to the five split archives below; only the number of files differs.
+#     Ork core plus every vendored static dependency.  It is built from 8 input
+#     archives — ork_static, ork_platform, fmt, yaml-cpp, kcp, libsodium,
+#     openssl_ssl, openssl_crypto — so only the number of files differs from the
+#     five-archive split layout below.
 #
 #     The merged form is therefore probed first. When it is present we link
 #     that one archive and skip split probing entirely, so lib/<triplet>/ can
@@ -265,7 +272,9 @@ if(OPENSSL_VERSION AND OPENSSL_VERSION VERSION_LESS 3)
 endif()
 
 # ---------------------------------------------------------------------------
-# 6. libsodium — ChaCha20-Poly1305 AEAD. Only the library is strictly needed:
+# 6. libsodium — ChaCha20-Poly1305 AEAD.  Split fallback layout only: the merged
+#    delivery archive already contains it and its probe results are discarded.
+#    Only the library is strictly needed:
 #    no Ork public header includes <sodium.h> (it is a PRIVATE dep upstream).
 # ---------------------------------------------------------------------------
 set(_ork_sodium_hints "")

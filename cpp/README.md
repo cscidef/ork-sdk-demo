@@ -3,7 +3,7 @@
 本目录是一个 **完全自包含** 的 C / C++ 集成示例：头文件、预编译静态库、
 header-only 第三方依赖全部随包分发，构建 demo **不需要** `harmonia_ork` 源码仓。
 
-六个 demo 覆盖 Ork 的两条接入面：
+七个 demo 覆盖 Ork 的两条接入面：
 
 | # | 目录 | 语言 | 接入面 | 一句话 |
 |---|------|------|--------|--------|
@@ -13,6 +13,7 @@ header-only 第三方依赖全部随包分发，构建 demo **不需要** `harmo
 | 04 | [`demos/04_cpp_client`](demos/04_cpp_client/) | C++20 | `OrkClient` + `IClientListener` | C++ 客户端：完整状态机迁移 + Reliable/Unreliable 往返计时 |
 | 05 | [`demos/05_broadcast`](demos/05_broadcast/) | C++20 | `ISender::Broadcast` | 广播扇出：`All()` / `Where()` / `Of()` 三种 `ConnectionSet` 形态 + `BroadcastReport` 自证 |
 | 06 | [`demos/06_encryption`](demos/06_encryption/) | C ABI（.cpp 编译单元） | `ork_host_*` + `ork_client_*` | AEAD 密钥协商：A/B 两轮对照证明 `encryption_active` 随服务端开关翻转且收发透明 |
+| 07 | [`demos/07_tutorial`](demos/07_tutorial/) | C++20 | `IHostListener` / `ISender`（纯 Mock） | 不连网的教程：回调事件顺序、Reliable/Unreliable 分流、自定义命令解析 |
 
 另有三个 CTest 用例（[`tests/`](tests/)），全部自包含、可 `ctest -j8` 并行。
 
@@ -31,11 +32,12 @@ cpp/
 │   ├── client/…                    C++ Client SDK（ork_client / client_config）
 │   └── platform|transport|codec|crypto|connection/…   被上面两组头连带依赖
 ├── thirdparty/include/         随包分发的 header-only 依赖（asio / fmt / spdlog / ikcp / …）
-├── lib/macos-arm64/            预编译静态库（交付合并包 + manifest，见「链接依赖」）
+├── lib/macos-arm64/            交付单库 libork_static.a + manifest.json + SHA256SUMS.txt
+├── lib/windows-x64/            Windows 放置说明（归档未随仓提交）
 ├── demos/
 │   ├── common/demo_support.hpp C++ demo / test 共用小工具（非 SDK 的一部分）
 │   ├── 01_echo_server/         main.c   + CMakeLists.txt + README.md
-│   ├── …                       （每个 demo 三件套）
+│   ├── …                       （每个 demo 三件套，含 07_tutorial 纯 Mock 教程）
 └── tests/                      三个 CTest 用例 + CMakeLists.txt
 ```
 
@@ -45,11 +47,11 @@ cpp/
 
 | 项 | 要求 | 说明 |
 |----|------|------|
-| 平台 | **macOS arm64**（当前 `lib/` 只有 `macos-arm64`） | 其他 triplet 需另行放置 `lib/<os>-<arch>/`，`FindOrk.cmake` 会自动按 `ORK_PLATFORM` 选取，也可 `-DORK_PLATFORM=…` 覆盖 |
+| 平台 | **macOS arm64**（`lib/macos-arm64/` 已放交付单库）；`lib/windows-x64/` 目前只有放置说明 | 其他 triplet 需自行放入 `lib/<os>-<arch>/`，`FindOrk.cmake` 会自动按 `ORK_PLATFORM` 选取，也可 `-DORK_PLATFORM=…` 覆盖 |
 | CMake | **≥ 3.20** | 工程用 `cmake_minimum_required(VERSION 3.20)`；CMake 4.x 已移除 < 3.5 的兼容层 |
 | 编译器 | 支持 **C++20** 与 **C11** | AppleClang 15+ / Clang 14+ / GCC 11+ / MSVC 19.30+。SDK 公开头用到 `std::span`、`<source_location>`、嵌套命名空间 |
-| OpenSSL | **3.x**（开发头 + 库） | `brew install openssl@3`（keg-only，`FindOrk.cmake` 已内置 Homebrew 路径提示）／`apt install libssl-dev` |
-| libsodium | 任意近期版本 | `brew install libsodium`／`apt install libsodium-dev`；也可 `-DSODIUM_ROOT=<prefix>` |
+| OpenSSL | **3.x 头文件** | 公共头 `#include <asio/ssl.hpp>` 需要头；实现已并入单库，**不链接** `libssl` / `libcrypto` |
+| libsodium | **单库形态不需要** | 只有分离库回退时才需要：`brew install libsodium`／`apt install libsodium-dev`，或 `-DSODIUM_ROOT=<prefix>` |
 
 `asio`、`fmt`、`spdlog`、`ikcp`、`concurrentqueue` 都已随包（header-only 或已编进静态库），
 **不需要** gRPC / Protobuf / Abseil。
@@ -58,8 +60,8 @@ cpp/
 
 ```bash
 -DCMAKE_BUILD_TYPE=Debug          # 默认 RelWithDebInfo
--DOPENSSL_ROOT_DIR=<prefix>       # OpenSSL 找不到时
--DSODIUM_ROOT=<prefix>            # libsodium 找不到时
+-DOPENSSL_ROOT_DIR=<prefix>       # OpenSSL 头找不到时（实现不需要）
+-DSODIUM_ROOT=<prefix>            # 只对分离库回退形态有意义
 -DORK_PLATFORM=macos-arm64        # 覆盖 triplet 自动探测
 ```
 
@@ -79,7 +81,7 @@ cmake --build build -j
 build/bin/
 ├── 01_echo_server   ├── 02_echo_client
 ├── 03_cpp_host      ├── 04_cpp_client
-├── 05_broadcast     ├── 06_encryption
+├── 05_broadcast     ├── 06_encryption      ├── 07_tutorial
 ├── test_c_abi_host  ├── test_c_abi_client   └── test_cpp_roundtrip
 ```
 
@@ -154,7 +156,21 @@ demo 抢端口，也能安全并行。
 ## 链接依赖
 
 `Ork::Core` 这个 IMPORTED 目标已经把整条链接闭包按正确顺序装好了，demo 只需
-`target_link_libraries(x PRIVATE Ork::Core)`。分离库形态展开后是：
+`target_link_libraries(x PRIVATE Ork::Core)`。
+
+**交付形态是单库**，链接展开后只剩系统库：
+
+```
+libork_static.a        一个归档里含：Ork 核心 + platform + kcp + fmt + yaml-cpp
+                       + libsodium + OpenSSL ssl/crypto
+  → Threads::Threads   asio io_context + 内部 pump 线程
+  → macOS: -framework CoreFoundation + resolv
+                       （Windows：ws2_32 mswsock crypt32）
+  → OpenSSL 头文件     仅编译时用（<asio/ssl.hpp>），不链接它的库
+```
+
+**回退形态是分离库**（开发构建树导出），仅在目录里找不到 `libork_static.a` /
+`ork_static.lib` 时才会走这条路：
 
 ```
 libork_core.a          Ork SDK 核心（session framework / transport / codec / crypto）
@@ -162,16 +178,18 @@ libork_core.a          Ork SDK 核心（session framework / transport / codec / 
   → libkcp.a           ikcp（Reliable 通道的 ARQ）
   → libfmt.a           格式化（spdlog 的依赖）
   → libyaml-cpp.a      NetworkConfig 等 YAML 解析
-  → OpenSSL::SSL / OpenSSL::Crypto    TLS 1.3 + ChaCha20-Poly1305 底座
-  → libsodium                         AEAD / HKDF / HMAC
+  → OpenSSL::SSL / OpenSSL::Crypto    TLS 1.3 + ChaCha20-Poly1305 底座（外部）
+  → libsodium                         AEAD / HKDF / HMAC（外部）
   → Threads::Threads                  asio io_context + 内部 pump 线程
   → macOS: -framework CoreFoundation + resolv
 ```
 
 要点：
 
-1. **顺序有意义**：静态库按「依赖者在前」排列，`ork_core` → `ork_platform` → thirdparty。
-2. **`LINKER_LANGUAGE CXX` 是必须的**：`libork_core.a` / `libork_platform.a` 是 C++ 归档
+1. **顺序有意义**（分离库形态）：静态库按「依赖者在前」排列，`ork_core` →
+   `ork_platform` → thirdparty。单库形态下这条不再适用——只有一份归档，顺序无从谈起。
+2. **`LINKER_LANGUAGE CXX` 是必须的**：`libork_static.a`（以及分离库的
+   `libork_core.a` / `libork_platform.a`）是 C++ 归档
    （asio、`std::span`、异常、RTTI、静态初始化）。纯 C 的 `main.c` 如果按 C 链接，
    编译器驱动不会带上 C++ 运行时库，链接期会炸出成片的
    `__cxa_*` / `operator new` / `std::__1::*` undefined symbol。

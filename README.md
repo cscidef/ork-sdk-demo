@@ -40,8 +40,7 @@ Both channels share **one port**: the TCP bootstrap listener and the UDP/KCP dat
 bind to the same port number (different protocols, so no conflict).
 
 This repository is the **demo and integration-test companion** to the Ork engine. It ships
-a prebuilt, self-contained demo server, complete client suites in Python and C/C++, and
-reserved skeletons for Go and C#.
+a prebuilt, self-contained demo server and complete client suites in Python and C/C++.
 
 ---
 
@@ -89,28 +88,25 @@ surfaces only. The Unity C# runtime lives in the Ork main repository
 
 \* The **client** code is fully cross-platform. Running it on Linux/Windows only needs a
 server binary for that platform — drop it into `server/linux-x64/` or `server/windows-x64/`
-and into `cpp/lib/<os>-<arch>/` for the C++ static libraries. See
+— plus the delivery payload for that triplet under `cpp/lib/<os>-<arch>/`. See
 [`server/linux-x64/README.md`](server/linux-x64/README.md) and
 [`server/windows-x64/README.md`](server/windows-x64/README.md).
 
-`cpp/cmake/FindOrk.cmake` resolves both naming conventions: `<name>.lib` on Windows
-(`ork_core.lib`, `yaml-cpp.lib`, …) and `lib<name>.a` on macOS/Linux. It also adds
-`ORK_STATIC` to the consumer's compile definitions, which is what makes the C ABI
-headers declare plain extern symbols instead of `__declspec(dllimport)` when linking a
-static `.lib` — omit it and every call fails at link time with `LNK2019`.
+`cpp/cmake/FindOrk.cmake` probes the **merged delivery archive** first
+(`libork_static.a` / `ork_static.lib`) and only falls back to the five split archives
+(`lib<name>.a` / `<name>.lib`) when none is present. It also adds `ORK_STATIC` to the
+consumer's compile definitions, which is what makes the C ABI headers declare plain extern
+symbols instead of `__declspec(dllimport)` when linking a static `.lib` — omit it and every
+call fails at link time with `LNK2019`.
 
-For Windows, `cpp/lib/windows-x64/` accepts either payload form, and `FindOrk.cmake` probes
-the merged one first:
-
-- **merged** — what the packager ships: `ork_static.lib` on its own. OpenSSL, libsodium,
-  KCP, fmt and yaml-cpp are already inside the archive, so no extra `.lib` is needed
-  (only OpenSSL *headers* for the C++ surface).
-- **split** — a dev build tree: `ork_core.lib`, `ork_platform.lib`, `kcp.lib`, `fmt.lib`,
-  `yaml-cpp.lib`, plus `sodium.lib` and OpenSSL import libs from your own prefix.
-
-Do not mix both in the same directory. The MSVC runtime must stay at `/MD` (default);
-`/MT` collides with the archives and fails with `LNK2038`. The full checklist lives in
-[`cpp/lib/windows-x64/README.md`](cpp/lib/windows-x64/README.md).
+The merged archive is the delivery form on both platforms: OpenSSL, libsodium, KCP, fmt and
+yaml-cpp are already inside it, so the only external requirement left is the OpenSSL
+**headers** needed by `<asio/ssl.hpp>` on the C++ surface. The split layout is a
+development-tree export and needs the five archives plus OpenSSL and libsodium from your own
+prefix — see [`cpp/lib/macos-arm64/README.md`](cpp/lib/macos-arm64/README.md) and
+[`cpp/lib/windows-x64/README.md`](cpp/lib/windows-x64/README.md). Do not mix both forms in
+one directory. The MSVC runtime must stay at `/MD` (default); `/MT` collides with the
+archives and fails with `LNK2038`.
 
 Platform detection lives in [`server/start.sh`](server/start.sh): it maps `uname -s` /
 `uname -m` onto the matching `server/<platform>/` directory and exits with a clear error
@@ -124,12 +120,16 @@ on anything unsupported.
 
 | Requirement | Version | Needed for |
 |---|---|---|
-| macOS | 12.0+ | everything |
+| macOS | **26.0+** (the archive's `minos` floor) | everything |
 | Python | 3.10+ | Python demos & tests |
 | CMake | 3.20+ | C/C++ demos & tests |
 | C/C++ compiler | C11 + C++20 (AppleClang 15+) | C/C++ demos, Python KCP bridge |
-| OpenSSL | 3.x (`brew install openssl@3`) | C/C++ demos |
-| libsodium | recent (`brew install libsodium`) | C/C++ demos |
+| OpenSSL | 3.x **headers** (`brew install openssl@3`) | C++ demos include `<asio/ssl.hpp>`; the implementation is already inside the archive |
+| libsodium | **not needed** (already inside `libork_static.a`) | only the split fallback layout needs `brew install libsodium` |
+
+`libork_static.a` is the **single-library delivery form**: the OpenSSL 3.x and libsodium
+implementations are already merged into the archive, so consumers neither install nor link
+those two libraries — in the merged layout `FindOrk.cmake` does not even probe for them.
 
 ### Four commands to a working echo
 
@@ -178,12 +178,13 @@ ork-sdk-demo/
 │   ├── setup.sh                 one-shot: venv → deps → KCP bridge → offline self-check
 │   └── README.md
 │
-├── cpp/                       C / C++ client suite — 6 demos, 3 CTest binaries (136 checks)
+├── cpp/                       C / C++ client suite — 7 demos, 3 CTest binaries (136 checks)
 │   ├── include/ork/             public SDK headers (C ABI + C++20 surfaces)
-│   ├── lib/macos-arm64/         prebuilt static libs (ork_core, ork_platform, kcp, fmt, yaml-cpp)
+│   ├── lib/macos-arm64/         delivery payload: libork_static.a + manifest.json + SHA256SUMS.txt + README.md
+│   ├── lib/windows-x64/         placement notes for the Windows payload (archive not checked in)
 │   ├── thirdparty/include/      vendored header-only deps (asio, fmt, spdlog, ikcp, …)
-│   ├── cmake/FindOrk.cmake      assembles everything into the Ork::Core imported target
-│   ├── demos/01..06/            each with main.c|.cpp + CMakeLists.txt + README.md
+│   ├── cmake/FindOrk.cmake      assembles the payload into the Ork::Core imported target
+│   ├── demos/01..07/            each with main.c|.cpp + CMakeLists.txt + README.md
 │   ├── tests/                   test_c_abi_host / test_c_abi_client / test_cpp_roundtrip
 │   └── README.md
 │
@@ -221,9 +222,11 @@ never needs the `harmonia_ork` source tree.
 | 04 | [`cpp_client`](cpp/demos/04_cpp_client/) | C++20 | `OrkClient` + `IClientListener` | Full state transitions, typed `SendResult`, per-channel RTT |
 | 05 | [`broadcast`](cpp/demos/05_broadcast/) | C++20 | `ISender::Broadcast` | Fan-out via `All()` / `Where()` / `Of()` + self-proving `BroadcastReport` |
 | 06 | [`encryption`](cpp/demos/06_encryption/) | C ABI | `ork_host_*` + `ork_client_*` | A/B two-round proof that `encryption_active` follows the server switch |
+| 07 | [`tutorial`](cpp/demos/07_tutorial/) | C++20 | `IHostListener` / `ISender` (pure mock) | Callback semantics walkthrough — event order, reliable/unreliable split, custom commands |
 
 Demos 05 and 06 are **single-process self-proving**: they run host and client in the same
-process on an ephemeral port, so they need no external server.
+process on an ephemeral port, so they need no external server. Demo 07 is pure mock — it
+opens no socket at all and only exercises the listener contract.
 
 ### C# (Unity)
 
@@ -268,8 +271,8 @@ cd cpp && cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build -j4 && 
 
 ## Building From Source
 
-The demo server and the `cpp/lib/` static libraries are **built artifacts** produced from the
-Ork engine repository. To rebuild them:
+The demo server and the `cpp/lib/` delivery payload (`libork_static.a` + `manifest.json`) are
+**built artifacts** produced from the Ork engine repository. To rebuild them:
 
 ```bash
 # 1. build the minimal embedded host in the engine repo

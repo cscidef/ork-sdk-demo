@@ -27,9 +27,15 @@
 OpenSSL **头文件**（`<asio/ssl.hpp>` 会引用），Homebrew 装好即可，找不到时传
 `-DOPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3`。
 
+本包的最低部署目标是 **macOS 26.0**（取归档内所有 Mach-O 成员 `minos` 的最大值），
+构建时 `-DCMAKE_OSX_DEPLOYMENT_TARGET` 不要低于 26.0，否则链接器会拒绝。
+
 ---
 
-## B. 分离库（开发构建树导出）
+## B. 分离库（回退形态，历史开发布局）
+
+> 交付与日常联调一律用 A。只有当本目录里**没有** `libork_static.a` / `ork_static.lib`
+> 时，`FindOrk.cmake` 才会退到这种形态。下面保留记录是为了能复现历史构建。
 
 从 `harmonia_ork` 的构建目录导出五个归档：
 
@@ -45,7 +51,7 @@ OpenSSL **头文件**（`<asio/ssl.hpp>` 会引用），Homebrew 装好即可，
 会通过 pkg-config 与 Homebrew 路径自动发现，缺失时传 `-DOPENSSL_ROOT_DIR` /
 `-DSODIUM_ROOT`。
 
-这种形态对应的 plaintext 开关是 ON，两边必须一致。
+这种形态对应的 plaintext 开关是 ON，与这里的合并包相反，两边必须一致。
 
 ---
 
@@ -108,7 +114,7 @@ configure 阶段应该看到这几行（用来确认选对了形态）：
 | 手头的包 | `plaintext bootstrap` | 能跑什么 |
 | --- | --- | --- |
 | `pack_static.sh` 默认（OFF） | OFF | 只能验证链接与 fail-closed 契约；`ctest` 的三条明文用例会在 `ork_host_create` / `ork_client_create` 处 fail closed，这是**预期**，不是缺陷 |
-| 打一份 `-AllowPlaintextBootstrap` 的开发包 | ON | 全量测试：ctest 3/3 |
+| 打一份 `--allow-plaintext-bootstrap` 的开发包（macOS 用 shell 参数，Windows 才是 PowerShell 的 `-AllowPlaintextBootstrap`） | ON | 全量测试：ctest 3/3 |
 
 `FindOrk.cmake` 的判定顺序是：显式 `-DORK_PLAINTEXT_BOOTSTRAP=ON|OFF` → 载荷里的
 `manifest.json` → 形态推断。所以只要把 `manifest.json` 一起放进来，它就会自动对齐，

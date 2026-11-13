@@ -28,7 +28,10 @@ OpenSSL **头文件**（`<asio/ssl.hpp>` 会引用），configure 时用
 
 ---
 
-## B. 分离库（开发构建树导出）
+## B. 分离库（回退形态，历史开发布局）
+
+> 交付与日常联调一律用 A。只有当本目录里**没有** `ork_static.lib` / `libork_static.a`
+> 时，`FindOrk.cmake` 才会退到这种形态。
 
 从 `harmonia_ork` 的构建目录导出五个归档：
 
@@ -47,7 +50,7 @@ OpenSSL **头文件**（`<asio/ssl.hpp>` 会引用），configure 时用
 - OpenSSL ≥ 3 的 `libssl.lib` / `libcrypto.lib` + 头，传 `-DOPENSSL_ROOT_DIR`
   或 vcpkg toolchain
 
-这种形态对应的 plaintext 开关是 ON，与仓库现有 mac 开发布局一致。
+这种形态对应的 plaintext 开关是 ON，与合并包相反，两边必须一致。
 
 ---
 
@@ -110,17 +113,17 @@ configure 阶段应该看到这几行（用来确认选对了形态）：
 
 ---
 
-## 后续：第三方头还没进 payload（待办，2026-11-11 记录）
+## 后续：第三方头还没进 payload（2026-11-11 记录，Windows 已出包终验）
 
-现状是「实现齐了，头没齐」：合并包里 OpenSSL 与 libsodium 的实现已经并进
+Windows 静态包已出包并完成终验：合并包里 OpenSSL 与 libsodium 的实现已经并进
 `ork_static.lib`，所以 **C ABI 消费者零外部依赖**，不需要 vcpkg、也不需要本地 SSL。
-但 C++ 这一层还差 OpenSSL 的**头文件**（公共头 `#include <asio/ssl.hpp>`），所以本
+但 C++ 这一层仍差 OpenSSL 的**头文件**（公共头 `#include <asio/ssl.hpp>`），所以本
 README 仍然要求 `-DOPENSSL_ROOT_DIR` 或 vcpkg toolchain。
 
-计划（排在 Windows 静态包第一次实机跑通之后）：把 `thirdparty/include/` 和
-`include/ork/` 的 C++ 头一起打进 payload，打包器从实际参与编译的 include 目录拷并
-把版本写进 `manifest.json`，头必须与归档内实现同源同版本。做完之后工程师就彻底不用
-碰 vcpkg 了。决策记录见 `harmonia_ork/doc/OrkDeliveryFormPlan.md` §7.2。
+仍待办的一项：把 `thirdparty/include/` 和 `include/ork/` 的 C++ 头一起打进 payload，
+打包器从实际参与编译的 include 目录拷并把版本写进 `manifest.json`，头必须与归档内
+实现同源同版本。做完之后工程师就彻底不用碰 vcpkg 了。决策记录见
+`harmonia_ork/doc/OrkDeliveryFormPlan.md` §7.2。
 
 ---
 
