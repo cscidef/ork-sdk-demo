@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | `libork_static.a` | `dist/macos/lib/libork_static.a` | **是** |
 | `manifest.json` | `dist/macos/manifest.json` | 否，但放了 configure 会打出包版本与来源提交 |
-| `SHA256SUMS.txt` | `dist/macos/SHA256SUMS.txt` | 否，用来核对拷进来的是不是同一个包 |
+| `SHA256SUMS.txt` | 由 `dist/macos/SHA256SUMS.txt` 改写成 **demo 布局** | 否，用来核对拷进来的是不是同一个包 |
 
 三份 C ABI 头**不放这里**，覆盖到 `cpp/include/ork/sdk/c/`：
 
@@ -58,18 +58,27 @@ DEMO=/Users/<you>/hadoWorld/HADO-PROJ/ork-sdk-demo
 # 1) 库 + 元数据（合并包形态）
 cp "$ORK/dist/macos/lib/libork_static.a" "$DEMO/cpp/lib/macos-arm64/"
 cp "$ORK/dist/macos/manifest.json"       "$DEMO/cpp/lib/macos-arm64/"
-cp "$ORK/dist/macos/SHA256SUMS.txt"      "$DEMO/cpp/lib/macos-arm64/"
 
 # 2) 三份头
 cp "$ORK/dist/macos/include/ork/sdk/c/"*.h "$DEMO/cpp/include/ork/sdk/c/"
 
-# 3) 确认拷进来的是打出来的那个包
+# 3) 清单：交付包的 SHA256SUMS.txt 是「包内布局」（include/…、lib/…、README、
+#    THIRD-PARTY-NOTICES），本目录是「demo 布局」（头在 ../../include，库平铺）。
+#    不能直接 cp，否则 shasum -c 会有 5 条找不到文件。改成按 demo 布局重写路径、
+#    去掉本目录没有的两份文档条目：
+sed -e 's|  include/ork/sdk/c/|  ../../include/ork/sdk/c/|' \
+    -e 's|  lib/libork_static.a|  libork_static.a|' \
+    -e '/  README\.md$/d' -e '/  THIRD-PARTY-NOTICES\.md$/d' \
+    "$ORK/dist/macos/SHA256SUMS.txt" > "$DEMO/cpp/lib/macos-arm64/SHA256SUMS.txt"
+
+# 4) 校验（5 条全 OK）+ 确认拷进来的是打出来的那个包
 cd "$DEMO/cpp/lib/macos-arm64"
+shasum -a 256 -c SHA256SUMS.txt
 shasum -a 256 libork_static.a | cut -d' ' -f1
 python3 -c "import json;print(json.load(open('manifest.json'))['archives']['merged']['sha256'])"
 ```
 
-两行输出必须相同。
+`shasum -c` 应 5/5 OK；最后两行输出必须相同。
 
 ---
 

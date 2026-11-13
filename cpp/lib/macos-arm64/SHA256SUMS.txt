@@ -1,7 +1,5 @@
-b076c934cac7efeccd8a79a9ef2569beae3ebec7b7ad34d848f300ff2bf6e2cb  README.md
-371955155b7d7dfde34b8cac6ed938e19c99494241491b5e6e3ab6fbbfdd19a3  THIRD-PARTY-NOTICES.md
-180daafccc839f8ff8164f427095b28f074190ab018a00e3177b8a18c8cc0844  include/ork/sdk/c/ork_abi.h
-030a20c80c77687de8fb9e0a193e176a943a60b483e8588a7ff00fee85889072  include/ork/sdk/c/ork_client_abi.h
-70ee39745f0338a6d8c45a9f1cdc34769eb03e2418a21c8b9266ff7c37501424  include/ork/sdk/c/ork_export.h
-805b6bbd152458c616bc511a391c44f97461a89a9290977584a9a2ff6cc0934f  lib/libork_static.a
+180daafccc839f8ff8164f427095b28f074190ab018a00e3177b8a18c8cc0844  ../../include/ork/sdk/c/ork_abi.h
+030a20c80c77687de8fb9e0a193e176a943a60b483e8588a7ff00fee85889072  ../../include/ork/sdk/c/ork_client_abi.h
+70ee39745f0338a6d8c45a9f1cdc34769eb03e2418a21c8b9266ff7c37501424  ../../include/ork/sdk/c/ork_export.h
+805b6bbd152458c616bc511a391c44f97461a89a9290977584a9a2ff6cc0934f  libork_static.a
 b4000cc0d79e21594120b16ebea61001937e4127eae690da3d6752a6365e51de  manifest.json
