@@ -223,6 +223,7 @@ endforeach()
 set(ORK_MANIFEST_SDK_ID "")
 set(ORK_MANIFEST_GIT_SHA "")
 set(_ork_manifest_plaintext "")
+set(_ork_manifest_tls "")
 if(ORK_MANIFEST_FILE)
     file(READ "${ORK_MANIFEST_FILE}" _ork_manifest_json)
     string(JSON ORK_MANIFEST_SDK_ID ERROR_VARIABLE _ork_e1
@@ -231,8 +232,11 @@ if(ORK_MANIFEST_FILE)
            GET "${_ork_manifest_json}" source git_sha)
     string(JSON _ork_manifest_plaintext ERROR_VARIABLE _ork_e3
            GET "${_ork_manifest_json}" security plaintext_bootstrap_compiled)
-    if(_ork_e1 OR _ork_e2 OR _ork_e3)
+    string(JSON _ork_manifest_tls ERROR_VARIABLE _ork_e4
+           GET "${_ork_manifest_json}" security bootstrap_tls)
+    if(_ork_e1 OR _ork_e2 OR _ork_e3 OR _ork_e4)
         set(_ork_manifest_plaintext "")
+        set(_ork_manifest_tls "")
     endif()
 endif()
 
@@ -251,6 +255,38 @@ if(NOT DEFINED ORK_PLAINTEXT_BOOTSTRAP)
 endif()
 
 # ---------------------------------------------------------------------------
+# 8b. TLS capability of the payload
+#
+#    Same idea as 8: whether the Client-side TLS channel exists at all is a
+#    property of how the archive was built (ORK_HAVE_TLS), not something a test can
+#    assume. Windows packages ship with the channel disabled, so "create with
+#    the default security mode" must fail closed there — a test that asserts
+#    OrkOk would encode a macOS-only assumption.
+#
+#    Priority:
+#      1. -DORK_HAS_TLS=ON|OFF                (explicit wins)
+#      2. manifest.json security.bootstrap_tls (authoritative: enabled/disabled)
+#      3. default OFF                          (fail closed)
+# ---------------------------------------------------------------------------
+if(NOT DEFINED ORK_HAS_TLS)
+    set(_ork_tls "")
+    if(_ork_manifest_tls)
+        string(TOLOWER "${_ork_manifest_tls}" _ork_tls)
+    endif()
+    if(_ork_tls STREQUAL "enabled")
+        set(ORK_HAS_TLS ON)
+    else()
+        set(ORK_HAS_TLS OFF)
+    endif()
+endif()
+
+if(ORK_HAS_TLS)
+    set(ORK_HAS_TLS_DEFINE 1)
+else()
+    set(ORK_HAS_TLS_DEFINE 0)
+endif()
+
+# ---------------------------------------------------------------------------
 # 9. Imported targets
 # ---------------------------------------------------------------------------
 if(NOT TARGET Ork::Thirdparty)
@@ -263,7 +299,9 @@ endif()
 #   ORK_STATIC=1  — on Windows ork_export.h would otherwise expand OrkExport to
 #                   __declspec(dllimport) and every call fails to link.
 #   ORK_ALLOW_PLAINTEXT_BOOTSTRAP — see section 8.
-set(ORK_COMPILE_DEFINITIONS ORK_STATIC=1)
+#   ORK_DEMO_HAS_TLS — see section 8b; tests branch on it instead of assuming
+#                   that TLS was compiled in.
+set(ORK_COMPILE_DEFINITIONS ORK_STATIC=1 ORK_DEMO_HAS_TLS=${ORK_HAS_TLS_DEFINE})
 if(ORK_PLAINTEXT_BOOTSTRAP)
     list(APPEND ORK_COMPILE_DEFINITIONS ORK_ALLOW_PLAINTEXT_BOOTSTRAP=1)
 endif()
@@ -308,4 +346,6 @@ if(NOT Ork_FIND_QUIETLY)
     endif()
     message(STATUS "  plaintext bootstrap: ${ORK_PLAINTEXT_BOOTSTRAP} "
                    "(must match the archive; override with -DORK_PLAINTEXT_BOOTSTRAP=ON|OFF)")
+    message(STATUS "  tls channel        : ${ORK_HAS_TLS} "
+                   "(from manifest; override with -DORK_HAS_TLS=ON|OFF)")
 endif()

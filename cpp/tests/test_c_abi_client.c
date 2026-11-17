@@ -200,12 +200,14 @@ int main(void)
         }
         CHECK(all_rejected, "create(struct_size ∉ {72,96}) 全部 -> InvalidArg");
     }
-    {   /* v1 布局（72 字节）必须被接受，且 TLS 字段按零值处理 */
+    {   /* v1 布局（72 字节）必须被接受，且 TLS 字段按零值处理。
+         * 零值语义是「默认 TLS」，所以能否创建取决于归档本身有没有编 TLS 通道
+         * （manifest.security.bootstrap_tls）。Windows 包为 disabled，此时正确
+         * 行为是 fail closed，不是 OrkOk。 */
         OrkClientConfig v1 = cfg;
         OrkClientHandle h = NULL;
         v1.struct_size = ORK_CLIENT_CONFIG_V1_SIZE;
-        /* v1 不读 bootstrap_security_mode，语义回落到默认（TLS）；
-         * 本构建 ORK_HAVE_TLS 已编入，因此 create 仍应成功。 */
+#if ORK_DEMO_HAS_TLS
         e = ork_client_create(&v1, &cb, &h);
         CHECK_EQ(e, OrkOk, "create(struct_size=v1 72B) -> OrkOk（向后兼容）");
         if (h != NULL)
@@ -214,6 +216,14 @@ int main(void)
                    "v1 句柄初始状态 Disconnected");
             ork_client_destroy(h);
         }
+#else
+        e = ork_client_create(&v1, &cb, &h);
+        CHECK_EQ(e, OrkErr_InvalidArg,
+               "create(struct_size=v1 72B) -> InvalidArg（本包无 TLS 通道）");
+        CHECK(h == NULL, "无 TLS 通道时不返回句柄");
+        CHECK(strstr(ork_client_last_error(), "TLS-capable build") != NULL,
+              "last_error 说明缺 TLS 通道");
+#endif
     }
 
     {   /* bootstrap_security_mode 非法值 */
@@ -245,11 +255,12 @@ int main(void)
         bad.max_packet_size = 10;
         EXPECT_REJECT(&bad, &cb, "create(max_packet_size=10) -> InvalidArg");
     }
-    {   /* TLS 模式 + 明文未编入的组合在这里不适用（本构建两者都编入），
-         * 但 Tls(2) 与 Default(0) 都必须能通过 create（证书校验推迟到 connect） */
+    {   /* Tls(2) 与 Default(0) 的创建结果同样由归档能力决定：
+         * 编入 TLS 时创建成功（证书校验推迟到 connect）；未编入时 fail closed。 */
         OrkClientConfig tls = cfg;
         OrkClientHandle h = NULL;
         tls.bootstrap_security_mode = OrkBootstrapSecurity_Tls;
+#if ORK_DEMO_HAS_TLS
         CHECK_EQ(ork_client_create(&tls, &cb, &h), OrkOk,
                "create(bootstrap_security_mode=Tls) -> OrkOk（证书在 connect 阶段校验）");
         if (h != NULL) ork_client_destroy(h);
@@ -259,6 +270,19 @@ int main(void)
         CHECK_EQ(ork_client_create(&tls, &cb, &h), OrkOk,
                "create(bootstrap_security_mode=Default) -> OrkOk");
         if (h != NULL) ork_client_destroy(h);
+#else
+        CHECK_EQ(ork_client_create(&tls, &cb, &h), OrkErr_InvalidArg,
+               "create(bootstrap_security_mode=Tls) -> InvalidArg（本包无 TLS 通道）");
+        CHECK(h == NULL, "Tls 模式不返回句柄");
+        if (h != NULL) ork_client_destroy(h);
+
+        h = NULL;
+        tls.bootstrap_security_mode = OrkBootstrapSecurity_Default;
+        CHECK_EQ(ork_client_create(&tls, &cb, &h), OrkErr_InvalidArg,
+               "create(bootstrap_security_mode=Default) -> InvalidArg（默认即 TLS）");
+        CHECK(h == NULL, "Default 模式不返回句柄");
+        if (h != NULL) ork_client_destroy(h);
+#endif
     }
 
     /* ---- 3. 正常创建 + 初始状态 ----------------------------------------- */
