@@ -93,20 +93,18 @@ server binary for that platform — drop it into `server/linux-x64/` or `server/
 [`server/windows-x64/README.md`](server/windows-x64/README.md).
 
 `cpp/cmake/FindOrk.cmake` probes the **merged delivery archive** first
-(`libork_static.a` / `ork_static.lib`) and only falls back to the five split archives
-(`lib<name>.a` / `<name>.lib`) when none is present. It also adds `ORK_STATIC` to the
+(`libork_static.a` / `ork_static.lib`). It also adds `ORK_STATIC` to the
 consumer's compile definitions, which is what makes the C ABI headers declare plain extern
 symbols instead of `__declspec(dllimport)` when linking a static `.lib` — omit it and every
 call fails at link time with `LNK2019`.
 
-The merged archive is the delivery form on both platforms: OpenSSL, libsodium, KCP, fmt and
-yaml-cpp are already inside it, so the only external requirement left is the OpenSSL
-**headers** needed by `<asio/ssl.hpp>` on the C++ surface. The split layout is a
-development-tree export and needs the five archives plus OpenSSL and libsodium from your own
-prefix — see [`cpp/lib/macos-arm64/README.md`](cpp/lib/macos-arm64/README.md) and
-[`cpp/lib/windows-x64/README.md`](cpp/lib/windows-x64/README.md). Do not mix both forms in
-one directory. The MSVC runtime must stay at `/MD` (default); `/MT` collides with the
-archives and fails with `LNK2038`.
+The merged archive is the **only** delivery form: OpenSSL, libsodium, KCP and fmt are
+already inside it, so the only external requirement left is OpenSSL **headers** for C++
+consumers that include `<asio/ssl.hpp>` — pure C consumers need nothing. The old split
+layout (`libork_core.a` + `libork_platform.a` + per-dependency archives) has been removed
+together with the C++ SDK sources; `FindOrk.cmake` fails loudly instead of falling back.
+The MSVC runtime must stay at `/MD` (default); `/MT` collides with the archives and fails
+with `LNK2038`.
 
 Platform detection lives in [`server/start.sh`](server/start.sh): it maps `uname -s` /
 `uname -m` onto the matching `server/<platform>/` directory and exits with a clear error
@@ -178,14 +176,14 @@ ork-sdk-demo/
 │   ├── setup.sh                 one-shot: venv → deps → KCP bridge → offline self-check
 │   └── README.md
 │
-├── cpp/                       C / C++ client suite — 7 demos, 3 CTest binaries (136 checks)
-│   ├── include/ork/             public SDK headers (C ABI + C++20 surfaces)
+├── cpp/                       C client suite — 5 demos, 3 CTest binaries
+│   ├── include/ork/sdk/c/       the only public headers: ork_abi.h / ork_client_abi.h / ork_export.h
 │   ├── lib/macos-arm64/         delivery payload: libork_static.a + manifest.json + SHA256SUMS.txt + README.md
 │   ├── lib/windows-x64/         placement notes for the Windows payload (archive not checked in)
 │   ├── thirdparty/include/      vendored header-only deps (asio, fmt, spdlog, ikcp, …)
 │   ├── cmake/FindOrk.cmake      assembles the payload into the Ork::Core imported target
-│   ├── demos/01..07/            each with main.c|.cpp + CMakeLists.txt + README.md
-│   ├── tests/                   test_c_abi_host / test_c_abi_client / test_cpp_roundtrip
+│   ├── demos/01,02,05,06,07/    each with main.c + CMakeLists.txt + README.md
+│   ├── tests/                   test_c_abi_host / test_c_abi_client / test_c_roundtrip
 │   └── README.md
 │
 └── scripts/
@@ -212,21 +210,20 @@ never needs the `harmonia_ork` source tree.
 | 05 | [`multi_client`](python/demos/05_multi_client/) | N concurrent independent sessions with aggregate success rate | `--clients` `--echoes` |
 | 06 | [`latency_measure`](python/demos/06_latency_measure/) | Per-channel RTT min / avg / p50 / p95 / p99 / max | `--pings` `--warmup` |
 
-### C / C++ — [`cpp/demos/`](cpp/demos/)
+### C — [`cpp/demos/`](cpp/demos/)
 
-| # | Demo | Language | Surface | What it shows |
-|---|------|----------|---------|---------------|
-| 01 | [`echo_server`](cpp/demos/01_echo_server/) | pure C11 | C ABI Host (13 fns) | Minimal server: create → callbacks → start → pump → stop |
-| 02 | [`echo_client`](cpp/demos/02_echo_client/) | pure C11 | C ABI Client (9 fns) | Minimal client: 96 B v2 config, caller-driven `pump_once`, dual-channel check |
-| 03 | [`cpp_host`](cpp/demos/03_cpp_host/) | C++20 | `SessionFramework` + `IHostListener` | TLS-capable bootstrap and `IConnectionRegistry` governance |
-| 04 | [`cpp_client`](cpp/demos/04_cpp_client/) | C++20 | `OrkClient` + `IClientListener` | Full state transitions, typed `SendResult`, per-channel RTT |
-| 05 | [`broadcast`](cpp/demos/05_broadcast/) | C++20 | `ISender::Broadcast` | Fan-out via `All()` / `Where()` / `Of()` + self-proving `BroadcastReport` |
-| 06 | [`encryption`](cpp/demos/06_encryption/) | C ABI | `ork_host_*` + `ork_client_*` | A/B two-round proof that `encryption_active` follows the server switch |
-| 07 | [`tutorial`](cpp/demos/07_tutorial/) | C++20 | `IHostListener` / `ISender` (pure mock) | Callback semantics walkthrough — event order, reliable/unreliable split, custom commands |
+Every demo is pure C11 and includes only the three public C headers.
 
-Demos 05 and 06 are **single-process self-proving**: they run host and client in the same
-process on an ephemeral port, so they need no external server. Demo 07 is pure mock — it
-opens no socket at all and only exercises the listener contract.
+| # | Demo | Surface | What it shows |
+|---|------|---------|---------------|
+| 01 | [`echo_server`](cpp/demos/01_echo_server/) | C ABI Host (13 fns) | Minimal server: create → callbacks → start → pump → stop |
+| 02 | [`echo_client`](cpp/demos/02_echo_client/) | C ABI Client (9 fns) | Minimal client: 96 B v2 config, caller-driven `pump_once`, dual-channel check |
+| 05 | [`broadcast`](cpp/demos/05_broadcast/) | `ork_host_broadcast` + `ork_host_send` | Fan-out: broadcast to all + host-maintained connection table for per-id sends, N×2 matrix |
+| 06 | [`encryption`](cpp/demos/06_encryption/) | `ork_host_*` + `ork_client_*` | A/B two-round proof that `encryption_active` follows the server switch |
+| 07 | [`tutorial`](cpp/demos/07_tutorial/) | C ABI callbacks | Real host+client walkthrough: on_connected → app command → on_disconnected |
+
+Demos 05, 06 and 07 are **single-process self-proving**: they run host and client in the
+same process on an ephemeral port, so they need no external server and exit with a verdict.
 
 ### C# (Unity)
 
@@ -290,9 +287,11 @@ it copies every non-system dylib into `server/macos-arm64/lib/`,
 rewrites install names to `@executable_path/../lib` (binary) and `@loader_path` (sibling
 dylibs), then applies an ad-hoc `codesign` — mandatory on arm64 after `install_name_tool`.
 
-The engine itself (transport core, C ABI, C++ SDK, Unity bindings) lives in the separate
-**`harmonia_ork`** repository. See [`server/README.md`](server/README.md) for the full
-packaging story and [`cpp/README.md`](cpp/README.md) for the link-closure details.
+The engine itself (transport core + C ABI + Unity bindings) lives in the separate
+**`harmonia_ork`** repository. This repository consumes only its formal delivery package:
+the merged static archive plus the three C headers. See
+[`server/README.md`](server/README.md) for the packaging story and
+[`cpp/README.md`](cpp/README.md) for the link-closure details.
 
 ---
 
@@ -326,8 +325,11 @@ Also worth reading before you integrate:
 - **Callbacks fire on Ork's internal strand thread.** Keep them non-blocking and never call
   `stop()` / `destroy()` from inside one (deadlock). `disconnect()` is safe.
 - **C ABI Host is pinned to `PlaintextDevelopment` bootstrap**, which force-collapses the bind
-  address to loopback. For TLS 1.3 use the C++ SDK (demo 03) with `TlsServerAuthenticated`.
-- Full caveats, log-routing table and `BroadcastReport` accounting rules:
+  address to loopback. Production use requires the C++ `SessionFramework` with
+  `TlsServerAuthenticated` + TLS 1.3 certificates; the C ABI has no TLS config fields yet,
+  which is why `cpp/lib/<triplet>/` holds a **dev** payload
+  (`plaintext_bootstrap_compiled=true`) for the local demos.
+- Full caveats and the log-routing table:
   [`cpp/README.md`](cpp/README.md) → *Known Limitations*.
 
 ---

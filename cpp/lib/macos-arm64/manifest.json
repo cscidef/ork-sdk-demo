@@ -8,39 +8,32 @@
   "archives": {
     "inputs": [
       {
-        "bytes": 2464232,
+        "bytes": 2492672,
         "members": 20,
         "name": "ork_static",
         "role": "ork_archive",
-        "sha256": "6eb45dd20752c701e04c8114e183341f64be0817541a6422aeb4c313078c27b0"
+        "sha256": "4296fe1fa5dce74cefb8c6c702b05a123d920a90740b7840a89e1432e8046898"
       },
       {
-        "bytes": 601064,
-        "members": 3,
+        "bytes": 401872,
+        "members": 2,
         "name": "ork_platform",
         "role": "ork_archive",
-        "sha256": "59a4178690f3da4e9b3bd11a560912acafc32c1c174ee52ee4c4313e288e274f"
+        "sha256": "9ccee4c191281f11917261b8eef8ff6e9c632e8d0d9d72224384fa37296191ce"
       },
       {
         "bytes": 180496,
         "members": 2,
         "name": "fmt",
         "role": "dependency_archive",
-        "sha256": "0f70f6921380f9fc05d8b07708b9cc69350e57851726a8c7a8dd0c4938ba2452"
-      },
-      {
-        "bytes": 644456,
-        "members": 30,
-        "name": "yaml-cpp",
-        "role": "dependency_archive",
-        "sha256": "412539a10cc56da6e2546c1c6d691ec05d2cd2abed61c20267e204f84b9e5221"
+        "sha256": "d9e3eac8dc494937bda7710d8b5fa9e00ebae9e909031553366265285421488e"
       },
       {
         "bytes": 15072,
         "members": 1,
         "name": "kcp",
         "role": "dependency_archive",
-        "sha256": "65b18e7954daefcdd208bca34a7d96591481f725f84f806ea396620fdb1aa587"
+        "sha256": "aba0ecf4049d28983e19d5685804b577d9ad7fbb6a653ffbfb6df41649dbabb5"
       },
       {
         "bytes": 511880,
@@ -65,14 +58,14 @@
       }
     ],
     "merged": {
-      "bytes": 14456192,
+      "bytes": 13641072,
       "duplicate_member_names": 0,
       "duplicate_strong_symbols": 0,
       "index_member": "__.SYMDEF",
-      "members": 1313,
+      "members": 1282,
       "name": "libork_static.a",
-      "sha256": "805b6bbd152458c616bc511a391c44f97461a89a9290977584a9a2ff6cc0934f",
-      "weak_comdat_duplicate_symbols": 781
+      "sha256": "695aad1d2113affd15270393e5db85f860953e829d5470d025ab58ddd74a6d04",
+      "weak_comdat_duplicate_symbols": 650
     }
   },
   "build": {
@@ -83,7 +76,7 @@
     "configuration": "Release",
     "generator": "Unix Makefiles",
     "parallelism": 4,
-    "plaintext_bootstrap_option": "OFF"
+    "plaintext_bootstrap_option": "ON"
   },
   "linker": {
     "flags": "libtool -static -D -no_warning_for_no_symbols"
@@ -103,14 +96,14 @@
   "payload": {
     "files": [
       {
-        "bytes": 4600,
+        "bytes": 4541,
         "path": "README.md",
-        "sha256": "b076c934cac7efeccd8a79a9ef2569beae3ebec7b7ad34d848f300ff2bf6e2cb"
+        "sha256": "de85fdb4249f73aea83b8dedad3958f739dfc48a071fe1678c93442139aec9da"
       },
       {
-        "bytes": 14230,
+        "bytes": 14106,
         "path": "THIRD-PARTY-NOTICES.md",
-        "sha256": "371955155b7d7dfde34b8cac6ed938e19c99494241491b5e6e3ab6fbbfdd19a3"
+        "sha256": "9b45b32a10a681d142d93ffc2529694fa9d92cbaebe03d2a2462b875a19e7960"
       },
       {
         "bytes": 17029,
@@ -128,9 +121,9 @@
         "sha256": "70ee39745f0338a6d8c45a9f1cdc34769eb03e2418a21c8b9266ff7c37501424"
       },
       {
-        "bytes": 14456192,
+        "bytes": 13641072,
         "path": "lib/libork_static.a",
-        "sha256": "805b6bbd152458c616bc511a391c44f97461a89a9290977584a9a2ff6cc0934f"
+        "sha256": "695aad1d2113affd15270393e5db85f860953e829d5470d025ab58ddd74a6d04"
       }
     ],
     "self_excluded": "manifest.json, SHA256SUMS.txt"
@@ -139,25 +132,25 @@
     "arch": "arm64",
     "deployment_target": "26.0",
     "min_macos": "26.0",
-    "min_macos_observed": "26.0:1313",
+    "min_macos_observed": "26.0:1282",
     "os": "darwin"
   },
   "schema": "ork.static-sdk.manifest/1",
   "security": {
     "bootstrap_tls": "enabled",
     "claim": "只声明构建与链接层面的事实；未做 TLS 配置审计、未声明 Production 就绪",
-    "plaintext_bootstrap_compiled": false,
+    "plaintext_bootstrap_compiled": true,
     "tls_library": "OpenSSL",
     "tls_version": "3.6.3"
   },
   "source": {
-    "commit_time": "2026-11-12T18:18:57+08:00",
-    "generated_at": "2026-11-12T10:18:57Z",
+    "commit_time": "2026-11-17T18:48:37+08:00",
+    "generated_at": "2026-11-17T10:48:37Z",
     "git_branch": "feat/desktop-static-sdk-packaging",
     "git_dirty": false,
     "git_dirty_entries": 0,
-    "git_sha": "2f831a160711bce9f44f254c1400e8c6f9bb6233",
-    "git_sha_short": "2f831a16",
+    "git_sha": "2760f81298f444a7a2f6b02d73bc7d8b87d0f153",
+    "git_sha_short": "2760f812",
     "stash_entries_untouched": 1
   },
   "system": {
@@ -172,15 +165,15 @@
     "abi_parity": "pass",
     "blackbox_abi_version": "1",
     "blackbox_bad_struct_size_rejected": "yes",
-    "blackbox_caps_plaintext": "off",
+    "blackbox_caps_plaintext": "on",
     "blackbox_caps_tls": "on",
-    "blackbox_client_plaintext": "rejected",
+    "blackbox_client_plaintext": "created",
     "blackbox_client_tls": "created",
     "blackbox_client_tls_explicit": "created",
     "blackbox_consumer": "pass",
-    "blackbox_host_state": "fail_closed",
-    "blackbox_host_state_expected": "fail_closed",
-    "blackbox_summary": "abi_version=1 caps_tls=on caps_plaintext=off host=fail_closed client_tls=created client_tls_explicit=created client_plaintext=rejected bad_struct_size_rejected=yes result=PASS",
+    "blackbox_host_state": "created",
+    "blackbox_host_state_expected": "created",
+    "blackbox_summary": "abi_version=1 caps_tls=on caps_plaintext=on host=created client_tls=created client_tls_explicit=created client_plaintext=created bad_struct_size_rejected=yes result=PASS",
     "contract_check": "pass",
     "dist_readback": "pass",
     "force_load": "pass",

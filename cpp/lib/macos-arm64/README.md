@@ -22,36 +22,22 @@
     cpp/include/ork/sdk/c/ork_client_abi.h
     cpp/include/ork/sdk/c/ork_export.h
 
-合并包里 OpenSSL 3.6.3、libsodium、kcp、fmt、yaml-cpp 都已并入，**不需要**再放
-`libssl.a` / `libcrypto.a` / `libsodium.a`，链了反而重复引入。仍然需要的只有
-OpenSSL **头文件**（`<asio/ssl.hpp>` 会引用），Homebrew 装好即可，找不到时传
-`-DOPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3`。
+合并包里 OpenSSL 3.6.3、libsodium、kcp、fmt 都已并入，**不需要**再放
+`libssl.a` / `libcrypto.a` / `libsodium.a`，链了反而重复引入。OpenSSL **头文件**只有
+C++ 消费者 include `<asio/ssl.hpp>` 时才需要（纯 C demo 用不到），Homebrew 装好即可，
+找不到时传 `-DOPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3`。
 
 本包的最低部署目标是 **macOS 26.0**（取归档内所有 Mach-O 成员 `minos` 的最大值），
 构建时 `-DCMAKE_OSX_DEPLOYMENT_TARGET` 不要低于 26.0，否则链接器会拒绝。
 
 ---
 
-## B. 分离库（回退形态，历史开发布局）
+## B. 分离库（已移除）
 
-> 交付与日常联调一律用 A。只有当本目录里**没有** `libork_static.a` / `ork_static.lib`
-> 时，`FindOrk.cmake` 才会退到这种形态。下面保留记录是为了能复现历史构建。
-
-从 `harmonia_ork` 的构建目录导出五个归档：
-
-| 放到本目录的文件 | 构建树里的位置 |
-| --- | --- |
-| `libork_core.a` | `build/source/core/` |
-| `libork_platform.a` | `build/source/core/platform/` |
-| `libkcp.a` | `build/thirdparty/kcp/` |
-| `libfmt.a` | `build/thirdparty/fmt/` |
-| `libyaml-cpp.a` | `build/thirdparty/yaml-cpp/` |
-
-另外必须提供（不在 SDK payload 里）：OpenSSL ≥ 3 与 libsodium，`FindOrk.cmake`
-会通过 pkg-config 与 Homebrew 路径自动发现，缺失时传 `-DOPENSSL_ROOT_DIR` /
-`-DSODIUM_ROOT`。
-
-这种形态对应的 plaintext 开关是 ON，与这里的合并包相反，两边必须一致。
+旧的分离库回退形态（`libork_core.a` + `libork_platform.a` + `libkcp.a` / `libfmt.a` /
+`libyaml-cpp.a`，外加外部 OpenSSL 与 libsodium）已随 C++ SDK 源码一并移除。
+`FindOrk.cmake` 只认合并归档，找不到就直接在 configure 阶段报错，不再回落——所以本目录
+必须存在 `libork_static.a`。
 
 ---
 

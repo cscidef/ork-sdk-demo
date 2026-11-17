@@ -39,20 +39,19 @@ Round B 就是把服务端关掉做对照 —— 客户端两轮都填 `enable_e
 本 demo（以及 C ABI Host 恒定使用的 `PlaintextDevelopment` 模式）里
 **bootstrap 走明文 TCP**，所以 SDK 会被强制 bind 到 loopback，并在启动时打一条
 **critical** 告警。这条告警只有 `ORK_LOG_LEVEL=off` 才会被抑制。
-生产环境请用 C++ SDK（[demo 03](../03_cpp_host/)）配 `TlsServerAuthenticated`
-+ TLS 1.3 证书链 / 私钥。
 
-## 为什么是 `main.cpp` 而不是 `main.c`
+因此本仓的 SDK 包是 **dev 包**（`manifest.json` 里
+`plaintext_bootstrap_compiled=true`），只用于本地回环演示。交付到生产的正式包
+是 `plaintext_bootstrap_compiled=false`（TLS-only），C ABI 目前**没有** TLS
+bootstrap 的配置字段，生产接入请使用 C++ 的 `SessionFramework` +
+`TlsServerAuthenticated` + TLS 1.3 证书链/私钥（本仓不演示 C++ 接入面）。
 
-Ork 的 C ABI 本身是纯 C11 的（[demo 01](../01_echo_server/) /
-[demo 02](../02_echo_client/) 就是 `main.c`）。本 demo 用 `.cpp` **只是为了复用
-`demos/common/demo_support.hpp` 里的 `PickFreePort()`**（需要 asio 才能跨平台地
-同时探测 TCP + UDP 空闲端口）与几个时间小工具 —— **所有 Ork API 调用都是 C ABI**，
-没有一个 C++ SDK 类型。
+## 纯 C 实现
 
-> ⚠️ 在 C++ 里 **不能** 用 `ORK_HOST_CONFIG_INIT` / `ORK_CLIENT_CONFIG_INIT`
-> 这类 C99 复合字面量宏（工程设了 `CMAKE_CXX_EXTENSIONS OFF`，复合字面量非法）。
-> 改成 `OrkHostConfig c{};` + 手工填 `struct_size`。
+本 demo 与 01/02/05/07 一样是 `main.c`，只 include
+`demos/common/demo_support_c.h`（纯 C11：计时、25B 探针帧、临时端口、双通道
+探针驱动、枚举名）与两枚 C ABI 头 —— **不依赖任何 C++ 头或内部 SDK 类型**。
+链接仍走 C++ 驱动（`LINKER_LANGUAGE CXX`），因为合并归档内部是 C++ 实现。
 
 ## 展示内容
 
@@ -109,5 +108,5 @@ PASS: C ABI encryption negotiation
 
 ## 源码
 
-[`main.cpp`](main.cpp) · [`CMakeLists.txt`](CMakeLists.txt) ·
-[`../common/demo_support.hpp`](../common/demo_support.hpp)
+[`main.c`](main.c) · [`CMakeLists.txt`](CMakeLists.txt) ·
+[`../common/demo_support_c.h`](../common/demo_support_c.h)

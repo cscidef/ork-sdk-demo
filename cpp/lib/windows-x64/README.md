@@ -21,36 +21,19 @@
     cpp\include\ork\sdk\c\ork_client_abi.h
     cpp\include\ork\sdk\c\ork_export.h
 
-合并包里 OpenSSL、libsodium、kcp、fmt、yaml-cpp 都已并入，**不需要**再放
-`libssl.lib` / `libcrypto.lib` / `sodium.lib`，链了反而重复引入。仍然需要的只有
-OpenSSL **头文件**（`<asio/ssl.hpp>` 会引用），configure 时用
+合并包里 OpenSSL、libsodium、kcp、fmt 都已并入，**不需要**再放
+`libssl.lib` / `libcrypto.lib` / `sodium.lib`，链了反而重复引入。OpenSSL **头文件**
+只有 C++ 消费者 include `<asio/ssl.hpp>` 时才需要（纯 C demo 用不到），configure 时用
 `-DOPENSSL_ROOT_DIR=<prefix>` 或 vcpkg toolchain 带出来。
 
 ---
 
-## B. 分离库（回退形态，历史开发布局）
+## B. 分离库（已移除）
 
-> 交付与日常联调一律用 A。只有当本目录里**没有** `ork_static.lib` / `libork_static.a`
-> 时，`FindOrk.cmake` 才会退到这种形态。
-
-从 `harmonia_ork` 的构建目录导出五个归档：
-
-| 放到本目录的文件 | 构建树里的位置 |
-| --- | --- |
-| `ork_core.lib` | `source\core\` |
-| `ork_platform.lib` | `source\core\platform\` |
-| `kcp.lib` | `thirdparty\kcp\` |
-| `fmt.lib` | `thirdparty\fmt\` |
-| `yaml-cpp.lib` | `thirdparty\yaml-cpp\` |
-
-另外必须提供（不在 SDK payload 里）：
-
-- `sodium.lib` — 直接放本目录即可（`FindOrk.cmake` 会把这里作为查找 hint），
-  或传 `-DSODIUM_ROOT=<prefix>`
-- OpenSSL ≥ 3 的 `libssl.lib` / `libcrypto.lib` + 头，传 `-DOPENSSL_ROOT_DIR`
-  或 vcpkg toolchain
-
-这种形态对应的 plaintext 开关是 ON，与合并包相反，两边必须一致。
+旧的分离库回退形态（`ork_core.lib` + `ork_platform.lib` + `kcp.lib` / `fmt.lib` /
+`yaml-cpp.lib`，外加外部 `sodium.lib` 与 OpenSSL）已随 C++ SDK 源码一并移除。
+`FindOrk.cmake` 只认合并归档，找不到就直接在 configure 阶段报错，不再回落——所以本目录
+必须存在 `ork_static.lib`。
 
 ---
 

@@ -1,16 +1,17 @@
 # =============================================================================
-#  Ork SDK — C / C++ 示例工程（顶层 CMake）
+#  Ork SDK — C 示例工程（顶层 CMake）
 #
 #  本目录是一个 **完全自包含** 的示例工程：
-#    include/            Ork SDK 公开头文件（C ABI + C++ SDK）
+#    include/ork/sdk/c/  Ork 公开头文件 —— 只有 3 个 C 头
+#                        （ork_abi.h / ork_client_abi.h / ork_export.h）
 #    thirdparty/include/ 随包分发的 header-only 依赖（asio / fmt / ikcp / ...）
 #    lib/<triplet>/      交付单库 libork_static.a（Windows 为 ork_static.lib）
-#                        + manifest.json；分离库仅作回退形态
+#                        + manifest.json（唯一受支持形态）
 #    cmake/FindOrk.cmake 把上面三者装配成 Ork::Core 这个 IMPORTED 目标
 #
-#  因此构建 demo **不需要** harmonia_ork 源码仓。交付单库已把 OpenSSL 3 与
-#  libsodium 的实现并入归档，机器上只缺 OpenSSL 的头文件（<asio/ssl.hpp>），
-#  不需要装或链这两个库的二进制（见 cpp/README.md「前置条件」）。
+#  因此构建 demo **不需要** harmonia_ork 源码仓，也不需要任何内部 C++ 头。
+#  交付单库已把 fmt / kcp / libsodium / OpenSSL 的实现并入归档，机器上不需要
+#  单独安装或链接这些库（见 cpp/README.md「前置条件」）。
 #
 #  用法：
 #    cmake -B build -DCMAKE_BUILD_TYPE=Debug
@@ -53,13 +54,11 @@ endif()
 
 # ---------------------------------------------------------------------------
 # 定位预编译 Ork SDK。
-# 产出三个 IMPORTED 目标：
+# 产出两个 IMPORTED 目标：
 #   Ork::Core        libork_static.a 单库（含全部下游依赖；demo 只需链接这一个）
-#                    回退形态下才是 libork_core.a + 全部下游依赖
-#   Ork::Platform    libork_platform.a（仅分离库回退形态存在，很少需要单独用）
 #   Ork::Thirdparty  vendored header-only 依赖的 include 路径
-# 以及 Ork::Core 上挂载的编译宏 ORK_HAVE_TLS / ORK_ALLOW_PLAINTEXT_BOOTSTRAP
-# （必须与预编译库的构建配置一致，否则 OrkClient 的成员布局会漂移 → ODR 破坏）。
+# 以及 Ork::Core 上挂载的编译宏 ORK_STATIC（Windows 静态链接必需）/
+# ORK_ALLOW_PLAINTEXT_BOOTSTRAP（必须与预编译库的构建配置一致）。
 # ---------------------------------------------------------------------------
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(Ork REQUIRED)
@@ -68,7 +67,8 @@ find_package(Ork REQUIRED)
 # 对多配置生成器（Xcode / Visual Studio）也一并生效。
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
-# C++ demo / test 共用的小工具头（日志初始化、临时端口、25B 探针帧、配置模板）。
+# 所有 demo / test 共用的纯 C11 小工具头（计时、临时端口、25B 探针帧、
+# 配置填充、双通道探针驱动、枚举名）。必须是纯 C —— 本仓不提供任何 C++ 头。
 # 必须在定义 ork_configure_demo() 之前捕获绝对路径：函数体内的
 # CMAKE_CURRENT_SOURCE_DIR 会解析成 *调用方* 的目录，而不是顶层。
 set(ORK_DEMO_COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/demos/common")
@@ -77,18 +77,17 @@ set(ORK_DEMO_COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/demos/common")
 # ork_configure_demo(<target>) —— 统一的 demo / test 目标装配
 #
 #   1. 链接 Ork::Core：一次性带进 include 路径、编译宏、静态库与系统库。
-#   2. LINKER_LANGUAGE CXX：**关键**。libork_static.a（合并包把 C++ 实现全并了
-#      进来）以及回退形态的 libork_core.a / libork_platform.a 都是
-#      C++ 归档（asio、std::span、异常、RTTI、静态初始化）。纯 C 的 main.c
-#      如果按 C 链接，编译器驱动不会带上 C++ 运行时库，链接期会炸出成片的
+#   2. LINKER_LANGUAGE CXX：**关键**。libork_static.a 是合并了 C++ 实现的
+#      归档（asio、std::span、异常、RTTI、静态初始化）。纯 C 的 main.c 如果
+#      按 C 链接，编译器驱动不会带上 C++ 运行时库，链接期会炸出成片的
 #      undefined symbol（__cxa_*、operator new、std::__1::*）。
-#   3. 打开常用告警 + Windows 上 asio 需要的宏。
+#   3. 打开常用告警 + Windows 上 C11 原子所需的宏。
 # ---------------------------------------------------------------------------
 function(ork_configure_demo target)
     target_link_libraries("${target}" PRIVATE Ork::Core)
     set_target_properties("${target}" PROPERTIES LINKER_LANGUAGE CXX)
 
-    # demos/common/demo_support.hpp（纯 C 目标用不到，但挂着也无害）
+    # demos/common/demo_support_c.h
     target_include_directories("${target}" PRIVATE "${ORK_DEMO_COMMON_DIR}")
 
     if(MSVC)
