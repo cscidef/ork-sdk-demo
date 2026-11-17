@@ -1,0 +1,190 @@
+{
+    "schema":  "ork.static-sdk.manifest/1",
+    "package":  {
+                    "name":  "ork-static-sdk",
+                    "sdk_id":  "ork-static-sdk-0.2.0-windows-x64",
+                    "version":  "0.2.0",
+                    "layout":  "dist/windows",
+                    "archive":  "lib/ork_static.lib",
+                    "includes":  [
+                                     "include/ork/sdk/c/ork_abi.h",
+                                     "include/ork/sdk/c/ork_client_abi.h",
+                                     "include/ork/sdk/c/ork_export.h"
+                                 ]
+                },
+    "platform":  {
+                     "os":  "windows",
+                     "arch":  "x86_64",
+                     "toolset":  "msvc",
+                     "crt":  "dynamic (/MD)",
+                     "vcpkg":  "x64-windows-static-md"
+                 },
+    "source":  {
+                   "git_sha":  "66c59c91beebac17f86a790e74d64cc23ad50353",
+                   "git_sha_short":  "66c59c91b",
+                   "git_branch":  "feat/desktop-static-sdk-packaging",
+                   "git_dirty":  false,
+                   "git_dirty_count":  0,
+                   "commit_time":  "2026-11-17T19:28:37+08:00",
+                   "generated_at":  "2026-11-17T11:28:37Z",
+                   "source_date_epoch":  "1794914917",
+                   "stash_entries_untouched":  0
+               },
+    "build":  {
+                  "configuration":  "Release",
+                  "generator":  "Visual Studio 17 2022",
+                  "build_dir":  "build/package-windows",
+                  "cmake":  "cmake version 4.1.2",
+                  "compiler":  "用于 x64 的 Microsoft (R) C/C++ 优化编译器 19.44.35217 版",
+                  "windows_sdk":  "10.0.26200",
+                  "msvc_runtime":  "MultiThreadedDLL",
+                  "pointer_size":  8,
+                  "pointer_bits":  64,
+                  "facts_file":  "ork_static_sdk_buildfacts*.txt",
+                  "facts_source":  "source/core/CMakeLists.txt file(GENERATE)",
+                  "parallel_jobs":  8,
+                  "plaintext_bootstrap_option":  "ON"
+              },
+    "abi":  {
+                "version":  1,
+                "header_declarations":  22,
+                "functions_in_archive":  22,
+                "missing_in_archive":  0,
+                "extended":  false
+            },
+    "security":  {
+                     "bootstrap_tls":  "disabled",
+                     "plaintext_bootstrap_compiled":  true,
+                     "claim":  "Records build/link facts only; no TLS audit, no production-ready claim."
+                 },
+    "archives":  {
+                     "merged":  {
+                                    "name":  "ork_static.lib",
+                                    "sha256":  "292453d2f8d18e5d7e05bf8d51591e5ebe28615d64c272537975739ee1244d6d",
+                                    "bytes":  27819382,
+                                    "members":  167,
+                                    "duplicate_member_names":  0,
+                                    "duplicate_strong_symbols":  0
+                                },
+                     "inputs":  [
+                                    {
+                                        "role":  "ork_archive",
+                                        "name":  "ork_static",
+                                        "sha256":  "32926c090cfb3a9916412dc4e893eb5a312d629a9b02bbdd9c24b45fd3364013",
+                                        "bytes":  18270354,
+                                        "members":  20
+                                    },
+                                    {
+                                        "role":  "ork_archive",
+                                        "name":  "ork_platform",
+                                        "sha256":  "c06c1c8a703a5e642f4e8618eb01f09425527f53b4bd79273f71ad1d3d3ce96d",
+                                        "bytes":  4418048,
+                                        "members":  2
+                                    },
+                                    {
+                                        "role":  "dependency_archive",
+                                        "name":  "fmt",
+                                        "sha256":  "943cd63f7fa212f1634091e4c578ec682b83e249ec2494bbf37376084067a482",
+                                        "bytes":  1405952,
+                                        "members":  2
+                                    },
+                                    {
+                                        "role":  "dependency_archive",
+                                        "name":  "kcp",
+                                        "sha256":  "e089ec493c660c193a58fe6a096c38e7fa929331935c1e31ff4fcb654fdd4107",
+                                        "bytes":  38074,
+                                        "members":  1
+                                    },
+                                    {
+                                        "role":  "dependency_archive",
+                                        "name":  "libsodium",
+                                        "sha256":  "a7ff01951ca7708565436238169ab85d9922107a08cd0484771920a7e226f447",
+                                        "bytes":  3791120,
+                                        "members":  142
+                                    }
+                                ]
+                 },
+    "system":  {
+                   "link_libs":  [
+
+                                 ],
+                   "runtime_dlls":  [
+                                        "ADVAPI32.dll",
+                                        "api-ms-win-crt-convert-l1-1-0.dll",
+                                        "api-ms-win-crt-filesystem-l1-1-0.dll",
+                                        "api-ms-win-crt-heap-l1-1-0.dll",
+                                        "api-ms-win-crt-locale-l1-1-0.dll",
+                                        "api-ms-win-crt-math-l1-1-0.dll",
+                                        "api-ms-win-crt-runtime-l1-1-0.dll",
+                                        "api-ms-win-crt-stdio-l1-1-0.dll",
+                                        "api-ms-win-crt-string-l1-1-0.dll",
+                                        "api-ms-win-crt-time-l1-1-0.dll",
+                                        "KERNEL32.dll",
+                                        "MSVCP140.dll",
+                                        "MSWSOCK.dll",
+                                        "VCRUNTIME140.dll",
+                                        "VCRUNTIME140_1.dll",
+                                        "WS2_32.dll"
+                                    ],
+                   "probe":  "link /WHOLEARCHIVE greedy lib removal (minimal set) + dumpbin /DEPENDENTS readback",
+                   "forbidden_runtime_dlls_found":  0
+               },
+    "verification":  {
+                         "contract_check":  "pass",
+                         "member_accounting":  "pass",
+                         "machine_x64":  "pass",
+                         "crt_md":  "pass",
+                         "abi_closure":  "pass",
+                         "abi_parity":  "pass",
+                         "ork_static_semantics":  "pass",
+                         "wholearchive_link":  "pass",
+                         "blackbox_consumer":  "pass",
+                         "blackbox_caps_tls":  "off",
+                         "blackbox_caps_plaintext":  "on",
+                         "blackbox_client_tls":  "rejected",
+                         "blackbox_client_tls_explicit":  "rejected",
+                         "blackbox_client_plaintext":  "created",
+                         "blackbox_abi_version":  "1",
+                         "blackbox_bad_struct_size_rejected":  "yes",
+                         "blackbox_summary":  "abi_version=1 caps_tls=off caps_plaintext=on host=created client_tls=rejected client_tls_explicit=rejected client_plaintext=created bad_struct_size_rejected=yes result=PASS",
+                         "no_ork_dll_runtime":  "pass",
+                         "dist_readback":  "pass",
+                         "reproducible_bytes":  "not-claimed"
+                     },
+    "linker":  "lib.exe /EXTRACT:\u003cexact member id as printed by /LIST\u003e /OUT:\u003cgenerated bare name\u003e (one member per call, count checked) -\u003e a\u003carchive#\u003e-\u003cseq\u003e-\u003chash10\u003e-\u003cleaf\u003e.obj rename -\u003e lib.exe with a bare-name response file under cwd=repack dir and an explicit absolute /OUT (member ids = planned bare names, index rebuilt by lib)",
+    "payload":  {
+                    "files":  [
+                                  {
+                                      "path":  "include/ork/sdk/c/ork_abi.h",
+                                      "sha256":  "e78f2ca0bbd89ed04a61a0c63264760eb4cc0770b3fc7dad74f65476467f7a3a",
+                                      "bytes":  17420
+                                  },
+                                  {
+                                      "path":  "include/ork/sdk/c/ork_client_abi.h",
+                                      "sha256":  "a2fa15154dcd5bfdc63bc33db4ca1487f11554a54128231fa58a045cd2e7ebaf",
+                                      "bytes":  18230
+                                  },
+                                  {
+                                      "path":  "include/ork/sdk/c/ork_export.h",
+                                      "sha256":  "e05673b3e45ef1b1a836a21e8773102bae616ff2ca2765df4bef5327fd6c5bb2",
+                                      "bytes":  2264
+                                  },
+                                  {
+                                      "path":  "lib/ork_static.lib",
+                                      "sha256":  "292453d2f8d18e5d7e05bf8d51591e5ebe28615d64c272537975739ee1244d6d",
+                                      "bytes":  27819382
+                                  },
+                                  {
+                                      "path":  "README.md",
+                                      "sha256":  "b218ceaeff4f6cc8dff60abc85e9b65dd34ff9e8e6fcc93dddb84dde3270378d",
+                                      "bytes":  6290
+                                  },
+                                  {
+                                      "path":  "THIRD-PARTY-NOTICES.md",
+                                      "sha256":  "154ccfc39b31fe7e7b5f2adac09674e5c4d418892d4625ddc24113fa00b4c1b5",
+                                      "bytes":  2375
+                                  }
+                              ],
+                    "self_excluded":  "manifest.json, SHA256SUMS.txt"
+                }
+}

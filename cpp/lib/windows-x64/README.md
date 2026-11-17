@@ -1,122 +1,99 @@
-# Windows x64 payload — 放置清单
+# Windows x64 载荷 — dev 包（已入库）
 
-`FindOrk.cmake` 认两种载荷形态，**合并包优先**（目录里只要出现 `ork_static.lib`
-或 `libork_static.a`，就按合并包处理，不再找五个分离库）。放其中一种进本目录即可。
+本目录放的是**已经打好并实测通过的 Windows 载荷**，不是占位说明。
+`FindOrk.cmake` 只认合并归档，目录里只要有 `ork_static.lib` 就按合并包处理。
 
----
-
-## A. 合并包（交付物，推荐）
-
-来源：`harmonia_ork` 里跑 `scripts\package\windows\pack_static.ps1` 产出的
-`dist\windows\`。
-
-| 放到本目录的文件 | 从哪拷 | 必需 |
-| --- | --- | --- |
-| `ork_static.lib` | `dist\windows\lib\ork_static.lib` | **是** |
-| `manifest.json` | `dist\windows\manifest.json` | 否，但放了 configure 会打出包版本与来源提交 |
-
-三份 C ABI 头**不放这里**，覆盖到 `cpp\include\ork\sdk\c\`：
-
-    cpp\include\ork\sdk\c\ork_abi.h
-    cpp\include\ork\sdk\c\ork_client_abi.h
-    cpp\include\ork\sdk\c\ork_export.h
-
-合并包里 OpenSSL、libsodium、kcp、fmt 都已并入，**不需要**再放
-`libssl.lib` / `libcrypto.lib` / `sodium.lib`，链了反而重复引入。OpenSSL **头文件**
-只有 C++ 消费者 include `<asio/ssl.hpp>` 时才需要（纯 C demo 用不到），configure 时用
-`-DOPENSSL_ROOT_DIR=<prefix>` 或 vcpkg toolchain 带出来。
-
----
-
-## B. 分离库（已移除）
-
-旧的分离库回退形态（`ork_core.lib` + `ork_platform.lib` + `kcp.lib` / `fmt.lib` /
-`yaml-cpp.lib`，外加外部 `sodium.lib` 与 OpenSSL）已随 C++ SDK 源码一并移除。
-`FindOrk.cmake` 只认合并归档，找不到就直接在 configure 阶段报错，不再回落——所以本目录
-必须存在 `ork_static.lib`。
-
----
-
-## 复制命令（PowerShell）
-
-```powershell
-# 按实际路径改这三行
-$ORK  = 'D:\src\Harmonia_ork'
-$DEMO = 'D:\src\ork-sdk-demo'
-$VCPKG = 'C:\vcpkg'
-
-# 1) 库 + 元数据（合并包形态）
-Copy-Item "$ORK\dist\windows\lib\ork_static.lib" "$DEMO\cpp\lib\windows-x64\" -Force
-Copy-Item "$ORK\dist\windows\manifest.json"      "$DEMO\cpp\lib\windows-x64\" -Force
-
-# 2) 三份头
-Copy-Item "$ORK\dist\windows\include\ork\sdk\c\*.h" "$DEMO\cpp\include\ork\sdk\c\" -Force
-
-# 3) 确认
-Get-ChildItem "$DEMO\cpp\lib\windows-x64\"
-Get-FileHash "$DEMO\cpp\lib\windows-x64\ork_static.lib" -Algorithm SHA256
+```
+ork_static.lib      27,819,382 B   sha256 292453d2f8d18e5d7e05bf8d51591e5ebe28615d64c272537975739ee1244d6d
+manifest.json       打包来源与安全事实（configure 会读它）
+SHA256SUMS.txt      逐文件校验
 ```
 
-`Get-FileHash` 的结果应该等于 `dist\windows\manifest.json` 里
-`archives.merged.sha256` 的值——这一步是确认「拷进去的就是打出来的那个」，不是
-中途被截断或换成了别的包。
+三份 C ABI 头不放这里，在 `cpp/include/ork/sdk/c/`（`ork_abi.h` / `ork_client_abi.h` / `ork_export.h`）。
 
 ---
 
-## 构建与测试
+## 为什么这里必须是 dev 包
+
+C ABI 存在一处**能力不对称**：
+
+| ABI 面 | TLS 字段 | 现状 |
+| --- | --- | --- |
+| Client `OrkClientConfig` v2（96B） | `bootstrap_security_mode` / `tls_ca_file` / `tls_expected_server_name` / `tls_use_system_trust_store` / `tls_handshake_timeout_ms` | 有 |
+| Host `OrkHostConfig`（64B） | 无 | **缺口**：桥接层把 Bootstrap 通道硬映射为 `PlaintextDevelopment` |
+
+而本轮 Windows 构建没有编 OpenSSL 通道（`ORK_HAVE_TLS` 未定义，`manifest.security.bootstrap_tls = disabled`）。
+两边一叠加：
+
+- **正式包**（`plaintext_bootstrap_compiled = false`）：`ork_host_create` 直接返回 `OrkErr_InvalidArg`，Client 的 TLS 也建不起来 —— 一个无法建立任何 Bootstrap 连接的包。它存在的意义是验证 ABI / 链接 / fail-closed 契约，不是给 demo 跑。
+- **dev 包**（本目录，`plaintext_bootstrap_compiled = true`）：Host 能以 `PlaintextDevelopment` 创建，Bootstrap 走明文 TCP 且**强制 bind loopback**，数据面仍走 OrkCipher AEAD。demo 要的正是这个。
+
+所以 demo 仓固定用 dev 包；正式交付包在 `harmonia_ork` 的 `dist/windows`（Release `/MD`）和 `dist/windows-debug`（Debug `/MDd`），两者都已在仓库里。
+
+---
+
+## 两个包的差异（本目录 = 左边）
+
+| 项 | 本目录 dev 包 | `dist/windows` 正式包 |
+| --- | --- | --- |
+| `plaintext_bootstrap_compiled` | `true` | `false` |
+| `bootstrap_tls` | `disabled` | `disabled` |
+| Host 能否创建 | 能（loopback 强制） | 不能（fail closed） |
+| Client TLS 连接 | 建不起来 | 建不起来 |
+| 用途 | demo / 本地联调 / ctest | 集成方链接验证、ABI 契约 |
+
+macOS 的载荷（`../macos-arm64/`）是另一种组合：`plaintext_bootstrap_compiled = true` **且** `bootstrap_tls = enabled`，所以 mac 上 TLS 与明文两条路径都在。
+
+---
+
+## 构建与测试（以下是实跑过的命令）
 
 ```powershell
-cd $DEMO\cpp
-cmake -B build -A x64 `
-      -DCMAKE_TOOLCHAIN_FILE="$VCPKG\scripts\buildsystems\vcpkg.cmake" `
+cd cpp
+cmake -S . -B build-win -A x64 `
+      -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake `
       -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
-cmake --build build --config Release -j
-cd build
+cmake --build build-win --config Release --parallel 8
+cd build-win
 ctest -C Release --output-on-failure
 ```
 
-configure 阶段应该看到这几行（用来确认选对了形态）：
+configure 阶段应该出现这几行（用来确认选对了形态与开关）：
 
-    --   payload : merged archive (...\cpp\lib\windows-x64\ork_static.lib)
-    --   package : ork-static-sdk-0.2.0-windows-x64 — built from <sha>
-    --   plaintext bootstrap: OFF
+```
+--   payload : merged archive (...\cpp\lib\windows-x64\ork_static.lib)
+--   package : ork-static-sdk-0.2.0-windows-x64 — built from 66c59c91...
+--   plaintext bootstrap: ON (must match the archive; ...)
+--   tls channel        : OFF (from manifest; ...)
+```
 
----
+`plaintext bootstrap` 与 `tls channel` 都从 `manifest.json` 自动读取，不用手填；
+确实要覆盖时才用 `-DORK_PLAINTEXT_BOOTSTRAP=ON|OFF` / `-DORK_HAS_TLS=ON|OFF`。
 
-## 两种开关的组合，别搞混
+Windows 10/11 + VS 2022 BuildTools（MSVC 19.44）+ CMake 4.1 + vcpkg `x64-windows-static-md` 下实测：
 
-| 手头的包 | `plaintext bootstrap` | 能跑什么 |
-| --- | --- | --- |
-| `pack_static.ps1` 默认（OFF） | OFF | 只能验证链接与 fail-closed 契约；`c_abi_host` 会在 `ork_host_create` 处失败，这是**预期** |
-| `pack_static.ps1 -AllowPlaintextBootstrap` | ON | 全量测试：ctest 3/3 + pytest 56/56 |
+| 项 | 结果 |
+| --- | --- |
+| configure | 通过，`payload=merged archive` / `plaintext=ON` / `tls=OFF` |
+| build | 通过，8 个可执行文件（5 demo + 3 test） |
+| `ctest -C Release` | 3/3 passed（`c_abi_host` / `c_abi_client` / `c_roundtrip`） |
+| `07_tutorial` | PASS |
+| `06_encryption` | PASS（Round A `encryption_active=1`、Round B `=0`，两轮 echo OK） |
+| `05_broadcast` | PASS（3 客户端，All=3 / Filtered=2 全部符合） |
+| `01_echo_server` + `02_echo_client` | PASS（Reliable + Unreliable 双通道回显 OK） |
 
-要跑全量测试就打一份 ON 的包给 demo，正式交付那份仍然是 OFF。`FindOrk.cmake`
-的判定顺序是：显式 `-DORK_PLAINTEXT_BOOTSTRAP=ON|OFF` → 载荷里的 `manifest.json`
-→ 形态推断。所以只要把 `manifest.json` 一起放进来，它就会自动对齐，不用手填。
-
----
-
-## 后续：第三方头还没进 payload（2026-11-11 记录，Windows 已出包终验）
-
-Windows 静态包已出包并完成终验：合并包里 OpenSSL 与 libsodium 的实现已经并进
-`ork_static.lib`，所以 **C ABI 消费者零外部依赖**，不需要 vcpkg、也不需要本地 SSL。
-但 C++ 这一层仍差 OpenSSL 的**头文件**（公共头 `#include <asio/ssl.hpp>`），所以本
-README 仍然要求 `-DOPENSSL_ROOT_DIR` 或 vcpkg toolchain。
-
-仍待办的一项：把 `thirdparty/include/` 和 `include/ork/` 的 C++ 头一起打进 payload，
-打包器从实际参与编译的 include 目录拷并把版本写进 `manifest.json`，头必须与归档内
-实现同源同版本。做完之后工程师就彻底不用碰 vcpkg 了。决策记录见
-`harmonia_ork/doc/OrkDeliveryFormPlan.md` §7.2。
+`test_c_abi_client` 里有三条断言与 TLS 能力有关（v1 72B、`Default`、`Tls`）：
+本包 `tls=OFF`，所以它们断言的是「fail closed 且错误信息点名 TLS-capable build」；
+在 macOS（`tls=ON`）上同一份代码断言的是「创建成功」。分支由 `ORK_DEMO_HAS_TLS` 控制，
+两边都严格，不是放宽。
 
 ---
 
 ## 常见错误
 
-- `LNK2019` / `LNK4217` 一片 → `ORK_STATIC` 没生效。`FindOrk.cmake` 已经自动加了，
-  如果是在别的工程里消费，要自己定义。
-- `LNK2038: RuntimeLibrary 不匹配` → `/MT` 与 `/MD` 混用。vcpkg triplet 必须是
-  `x64-windows-static-md`，不是 `x64-windows-static`。
-- `Missing Ork static library 'ork_core'` → 目录里既没有 `ork_static.lib` 也没有
-  五个分离库，八成是复制时路径少了一层（`dist\windows\lib\` 而不是 `dist\windows\`）。
-- configure 里 `package : no manifest.json` → 只拷了 `.lib`，没拷 `manifest.json`。
-  能跑，但看不出这个库是哪次提交打的。
+- `LNK2019` / `LNK4217` 一片 → `ORK_STATIC` 没生效。`FindOrk.cmake` 已自动定义；在别的工程里消费要自己加。
+- `LNK2038: RuntimeLibrary 不匹配` → `/MT` 与 `/MD` 混用。triplet 必须是 `x64-windows-static-md`，不是 `x64-windows-static`。
+- `Missing Ork static library` → 目录里没有 `ork_static.lib`，或复制时少了一层（是 `lib\` 下面那个）。
+- `ork_host_create -> OrkErr_InvalidArg`，错误信息含 `PlaintextDevelopment` → 手里是正式包（`plaintext=false`），不是本目录的 dev 包。
+- `ork_client_create -> ... requires a TLS-capable build` → 同上：本包没编 OpenSSL，Client 的 TLS 路径不可用。
+- configure 里 `package : no manifest.json` → 只拷了 `.lib` 没拷 `manifest.json`，能力开关就退化成默认值，别这么用。

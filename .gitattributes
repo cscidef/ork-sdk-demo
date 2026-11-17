@@ -1,0 +1,5 @@
+# 交付载荷：字节必须与打包器产物完全一致。
+# manifest.json 里带着 archives.merged.sha256，SHA256SUMS.txt 又给每个文件记了哈希；
+# 一旦 eol 转换改掉任何一个字节，消费方校验就会失败。这里统一关掉转换。
+cpp/lib/** -text
+server/**/lib/** -text

@@ -80,7 +80,7 @@ packaged self-contained so it runs on a clean machine with no Homebrew or SDK in
 |----------|--------|---------------|--------------|
 | **macOS arm64** | ✅ Available | ✅ Available | ✅ Available |
 | **Linux x64** | 🚧 Planned | ✅ Ready\* | ✅ Ready\* |
-| **Windows x64** | 🚧 Planned | ✅ Ready\* | ✅ Ready\* |
+| **Windows x64** | 🚧 Planned | ✅ Ready\* | ✅ Available (dev package) |
 
 Go and .NET bindings are not published here — this repository ships the Python and C/C++
 surfaces only. The Unity C# runtime lives in the Ork main repository
@@ -91,6 +91,13 @@ server binary for that platform — drop it into `server/linux-x64/` or `server/
 — plus the delivery payload for that triplet under `cpp/lib/<os>-<arch>/`. See
 [`server/linux-x64/README.md`](server/linux-x64/README.md) and
 [`server/windows-x64/README.md`](server/windows-x64/README.md).
+
+The Windows C/C++ payload **is** checked in and verified on real hardware
+(`ctest` 3/3 plus all five demos on Windows 11 + MSVC 19.44). It is a **dev package**
+(`plaintext_bootstrap_compiled=true`, `bootstrap_tls=disabled`) because the C ABI Host
+surface has no TLS fields yet and the formal Windows package ships plaintext off — in
+that combination `ork_host_create` fails closed by design. Details and the exact hashes:
+[`cpp/lib/windows-x64/README.md`](cpp/lib/windows-x64/README.md).
 
 `cpp/cmake/FindOrk.cmake` probes the **merged delivery archive** first
 (`libork_static.a` / `ork_static.lib`). It also adds `ORK_STATIC` to the
@@ -179,7 +186,8 @@ ork-sdk-demo/
 ├── cpp/                       C client suite — 5 demos, 3 CTest binaries
 │   ├── include/ork/sdk/c/       the only public headers: ork_abi.h / ork_client_abi.h / ork_export.h
 │   ├── lib/macos-arm64/         delivery payload: libork_static.a + manifest.json + SHA256SUMS.txt + README.md
-│   ├── lib/windows-x64/         placement notes for the Windows payload (archive not checked in)
+│   ├── lib/windows-x64/         delivery payload: ork_static.lib + manifest.json + SHA256SUMS.txt + README.md
+│   │                            (dev package: plaintext bootstrap ON, TLS channel disabled)
 │   ├── thirdparty/include/      vendored header-only deps (asio, fmt, spdlog, ikcp, …)
 │   ├── cmake/FindOrk.cmake      assembles the payload into the Ork::Core imported target
 │   ├── demos/01,02,05,06,07/    each with main.c + CMakeLists.txt + README.md

@@ -30,7 +30,7 @@ cpp/
 │   └── ork_export.h                跨平台符号可见性
 ├── thirdparty/include/         随包分发的 header-only 依赖（asio / fmt / ikcp / …）
 ├── lib/macos-arm64/            合并库 libork_static.a + manifest.json + SHA256SUMS.txt
-├── lib/windows-x64/            Windows 放置说明（归档未随仓提交）
+├── lib/windows-x64/            Windows 交付载荷（dev 包：plaintext ON / tls disabled）
 ├── demos/
 │   ├── common/demo_support_c.h 纯 C11 demo / test 共用小工具（非 SDK 的一部分）
 │   ├── 01_echo_server/         main.c + CMakeLists.txt + README.md
@@ -44,7 +44,7 @@ cpp/
 
 | 项 | 要求 | 说明 |
 |----|------|------|
-| 平台 | **macOS arm64**（`lib/macos-arm64/` 已放交付单库）；`lib/windows-x64/` 目前只有放置说明 | 其他 triplet 需自行放入 `lib/<os>-<arch>/`，`FindOrk.cmake` 会自动按 `ORK_PLATFORM` 选取，也可 `-DORK_PLATFORM=…` 覆盖 |
+| 平台 | **macOS arm64**（`lib/macos-arm64/`）与 **Windows x64**（`lib/windows-x64/`）都已放交付单库 | 其他 triplet 需自行放入 `lib/<os>-<arch>/`，`FindOrk.cmake` 会自动按 `ORK_PLATFORM` 选取，也可 `-DORK_PLATFORM=…` 覆盖 |
 | CMake | **≥ 3.20** | 工程用 `cmake_minimum_required(VERSION 3.20)`；CMake 4.x 已移除 < 3.5 的兼容层 |
 | 编译器 | 支持 **C11**（+ C++ 链接驱动） | AppleClang 15+ / Clang 14+ / GCC 11+ / MSVC 19.30+。源文件全是 `.c`；链接走 C++ 驱动，因为归档内部是 C++ 实现 |
 | OpenSSL | **可选** | 纯 C demo 不需要；只有 C++ 消费者 include `<asio/ssl.hpp>` 时才需要头。实现已并入单库，**不链接** `libssl` / `libcrypto` |
@@ -60,11 +60,14 @@ cpp/
 -DOPENSSL_ROOT_DIR=<prefix>       # 仅 C++ 消费者需要 OpenSSL 头时
 -DORK_PLATFORM=macos-arm64        # 覆盖 triplet 自动探测
 -DORK_PLAINTEXT_BOOTSTRAP=ON|OFF  # 默认跟随 manifest.json
+-DORK_HAS_TLS=ON|OFF              # 默认跟随 manifest.json（决定测试断言 TLS 可用还是 fail closed）
 ```
 
 ---
 
 ## 构建
+
+macOS / Linux：
 
 ```bash
 cd cpp
@@ -72,7 +75,19 @@ cmake -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j
 ```
 
-所有可执行文件统一落在 **`build/bin/`**（多配置生成器如 Xcode / VS 也一样）：
+Windows（VS 2022 + vcpkg，运行时必须是 `/MD`）：
+
+```powershell
+cd cpp
+cmake -S . -B build-win -A x64 `
+      -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake `
+      -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
+cmake --build build-win --config Release --parallel 8
+cd build-win; ctest -C Release --output-on-failure
+```
+
+所有可执行文件统一落在 `build/bin/`（VS 这类多配置生成器会多一层配置目录，如
+`build/bin/Release/`；Xcode 同理）：
 
 ```
 build/bin/
